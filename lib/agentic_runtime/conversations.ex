@@ -1,0 +1,586 @@
+defmodule AgenticRuntime.Conversations do
+  @moduledoc """
+  Context for conversation persistence with multi-content type support.
+
+  This module provides scoped access to conversations, agent states, and display messages.
+
+  ## Scope-Based Security
+
+  All conversation operations require a scope struct (`MyApp.Users.User`)
+  as the first argument. This ensures queries are automatically filtered to
+  the appropriate user, organization, or team context.
+
+  ## Multi-Content Type Support
+
+  Display messages support multiple content types (text, thinking, images, files, etc.).
+  Use the provided helper functions to create messages with proper structure:
+
+  - `append_text_message/3` - Standard text content
+  - `append_thinking_message/2` - AI reasoning blocks
+  - `append_image_message/3` - Images with URL or base64 data
+  - `append_file_message/4` - File references
+  - `append_structured_data_message/4` - Tables, JSON, etc.
+  - `append_notification_message/3` - System notifications
+  - `append_error_message/3` - Error messages
+
+  **IMPORTANT**: All content keys are strings (not atoms) due to JSONB storage.
+  """
+
+  import Ecto.Query, warn: false
+  alias Sagents.Todo
+  alias AgenticRuntime.Conversations.AgentState
+  alias AgenticRuntime.Conversations.Conversation
+  alias AgenticRuntime.Conversations.DisplayMessage
+
+  #
+  # Conversation CRUD
+  #
+
+  @doc """
+  Creates a conversation within the given scope.
+
+  The conversation is automatically associated with the scope's owner.
+  Accepts attrs with either atom or string keys.
+  """
+  def create_conversation(%{} = scope, attrs) do
+    scope
+    |> get_owner_id()
+    |> Conversation.create_changeset(attrs)
+    |> repo().insert()
+  end
+
+  @doc """
+  Gets a conversation by ID, scoped to the given context.
+
+  Raises if the conversation doesn't exist or doesn't belong to the scope.
+  """
+  def get_conversation!(scope, id) do
+    Conversation
+    |> scope_query(scope)
+    |> repo().get!(id)
+  end
+
+  @doc """
+  Gets a conversation by ID, scoped to the given context.
+
+  Returns `{:ok, conversation}` or `{:error, :not_found}`.
+  """
+  def get_conversation(scope, id) do
+    Conversation
+    |> scope_query(scope)
+    |> repo().get(id)
+    |> case do
+      nil -> {:error, :not_found}
+      conversation -> {:ok, conversation}
+    end
+  end
+
+  @doc """
+  Lists all conversations accessible within the given scope.
+
+  ## Options
+
+    * `:limit` - Maximum number of conversations to return (default: 50)
+    * `:offset` - Number of conversations to skip (default: 0)
+  """
+  def list_conversations(scope, opts \\ []) do
+    limit = Keyword.get(opts, :limit, 50)
+    offset = Keyword.get(opts, :offset, 0)
+
+    Conversation
+    |> scope_query(scope)
+    |> order_by([c], desc: c.updated_at)
+    |> limit(^limit)
+    |> offset(^offset)
+    |> repo().all()
+  end
+
+  def update_conversation(%Conversation{} = conversation, attrs) do
+    conversation
+    |> Conversation.changeset(attrs)
+    |> repo().update()
+  end
+
+  def delete_conversation(%Conversation{} = conversation) do
+    repo().delete(conversation)
+  end
+
+  def delete_conversation(scope, conversation_id) when is_binary(conversation_id) do
+    conversation = get_conversation!(scope, conversation_id)
+    repo().delete(conversation)
+  end
+
+  #
+  # Agent State Persistence
+  #
+
+  def save_agent_state(conversation_id, state) do
+    attrs = %{
+      conversation_id: conversation_id,
+      state_data: state,
+      version: state["version"] || 1
+    }
+
+    case get_agent_state(conversation_id) do
+      nil ->
+        %AgentState{}
+        |> AgentState.changeset(attrs)
+        |> repo().insert()
+
+      existing ->
+        existing
+        |> AgentState.changeset(attrs)
+        |> repo().update()
+    end
+  end
+
+  def load_agent_state(conversation_id) do
+    case get_agent_state(conversation_id) do
+      nil -> {:error, :not_found}
+      state -> {:ok, state.state_data}
+    end
+  end
+
+  @doc """
+  Loads just the TODOs from a saved agent state.
+
+  This is useful for displaying TODOs in the UI when browsing historical
+  conversations without starting the agent. Returns an empty list if no
+  state exists or if there are no todos.
+
+  Reuses the same deserialization logic as full state restoration via
+  `Sagents.Todo.from_map/1`.
+  """
+  def load_todos(conversation_id) do
+    case load_agent_state(conversation_id) do
+      {:ok, %{"state" => %{"todos" => todos}}} when is_list(todos) ->
+        # Reuse Todo.from_map/1 - same logic as StateSerializer.deserialize_state/2
+        todos
+        |> Enum.map(fn todo_map ->
+          case Todo.from_map(todo_map) do
+            {:ok, todo} -> todo
+            {:error, _} -> nil
+          end
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      {:ok, _} ->
+        # State exists but no todos field
+        []
+
+      {:error, :not_found} ->
+        # No saved state
+        []
+    end
+  end
+
+  defp get_agent_state(conversation_id) do
+    AgentState
+    |> where([a], a.conversation_id == ^conversation_id)
+    |> repo().one()
+  end
+
+  #
+  # Display Messages
+  #
+
+  @doc """
+  Appends a display message to the conversation.
+
+  The message should be a map with keys:
+  - `message_type` - "user", "assistant", "tool", "system"
+  - `content_type` - Type of content for rendering
+  - `content` - Map with structure based on content_type
+  - `metadata` - Optional metadata
+
+  For easier usage, consider using the content-type-specific helper functions.
+  """
+  def append_display_message(conversation_id, attrs) do
+    conversation_id
+    |> DisplayMessage.create_changeset(attrs)
+    |> repo().insert()
+  end
+
+  @doc """
+  Loads all display messages for a conversation.
+
+  ## Options
+
+    * `:limit` - Maximum number of messages to return (default: 100)
+    * `:offset` - Number of messages to skip (default: 0)
+  """
+  def load_display_messages(conversation_id, opts \\ []) do
+    limit = Keyword.get(opts, :limit, 100)
+    offset = Keyword.get(opts, :offset, 0)
+
+    DisplayMessage
+    |> where([m], m.conversation_id == ^conversation_id)
+    |> order_by([m], asc: m.inserted_at, asc: m.sequence)
+    |> limit(^limit)
+    |> offset(^offset)
+    |> repo().all()
+  end
+
+  #
+  # Content Type Helper Functions
+  # NOTE: All helper functions create content maps with STRING keys (not atoms)
+  # because Ecto :map type (JSONB) stores keys as strings
+  #
+
+  @doc """
+  Appends a text message to the conversation.
+
+  ## Parameters
+
+    * `conversation_id` - The conversation ID
+    * `message_type` - The message type ("user", "assistant", "tool", "system")
+    * `text` - The text content
+
+  ## Examples
+
+      append_text_message(convo_id, "user", "Hello!")
+      append_text_message(convo_id, "assistant", "How can I help?")
+  """
+  def append_text_message(conversation_id, message_type, text) do
+    append_display_message(conversation_id, %{
+      message_type: message_type,
+      content_type: "text",
+      content: %{"text" => text}
+    })
+  end
+
+  @doc """
+  Updates a pending tool call message to "executing" status.
+
+  This is called when a tool begins execution, transitioning from "pending" to "executing".
+
+  ## Parameters
+    - call_id: The tool call ID (from content.call_id)
+
+  ## Returns
+    - {:ok, %DisplayMessage{}} on success
+    - {:error, :not_found} if no pending tool call with this call_id exists
+    - {:error, changeset} on validation failure
+
+  ## Example
+      iex> mark_tool_executing("call_123")
+      {:ok, %DisplayMessage{status: "executing", ...}}
+  """
+  @spec mark_tool_executing(String.t()) ::
+          {:ok, DisplayMessage.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def mark_tool_executing(call_id) do
+    query =
+      from(m in DisplayMessage,
+        where: fragment("?->>'call_id' = ?", m.content, ^call_id),
+        where: m.content_type == "tool_call",
+        where: m.status == "pending"
+      )
+
+    case repo().one(query) do
+      nil ->
+        {:error, :not_found}
+
+      message ->
+        message
+        |> DisplayMessage.changeset(%{"status" => "executing"})
+        |> repo().update()
+    end
+  end
+
+  @doc """
+  Updates a tool call message to "completed" status and adds result metadata.
+
+  This is called when a tool successfully completes execution. Accepts tool calls in
+  either "pending" or "executing" status.
+
+  ## Parameters
+    - call_id: The tool call ID
+    - result_metadata: Map containing result information (e.g., %{"result" => "success"})
+
+  ## Returns
+    - {:ok, %DisplayMessage{}} on success
+    - {:error, :not_found} if no pending/executing tool call with this call_id exists
+    - {:error, changeset} on validation failure
+
+  ## Example
+      iex> complete_tool_call("call_123", %{"result" => "File written successfully"})
+      {:ok, %DisplayMessage{status: "completed", metadata: %{"result" => ...}}}
+  """
+  @spec complete_tool_call(String.t(), map()) ::
+          {:ok, DisplayMessage.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def complete_tool_call(call_id, result_metadata \\ %{}) do
+    query =
+      from(m in DisplayMessage,
+        where: fragment("?->>'call_id' = ?", m.content, ^call_id),
+        where: m.content_type == "tool_call",
+        where: m.status in ["pending", "executing", "interrupted"]
+      )
+
+    case repo().one(query) do
+      nil ->
+        {:error, :not_found}
+
+      message ->
+        updated_metadata = Map.merge(message.metadata, result_metadata)
+
+        message
+        |> DisplayMessage.changeset(%{
+          "status" => "completed",
+          "metadata" => updated_metadata
+        })
+        |> repo().update()
+    end
+  end
+
+  @doc """
+  Updates a tool call message to "failed" status and adds error information.
+
+  This is called when a tool execution fails. Accepts tool calls in either "pending"
+  or "executing" status.
+
+  ## Parameters
+    - call_id: The tool call ID
+    - error_info: Map containing error details (e.g., %{"error" => "File not found"})
+
+  ## Returns
+    - {:ok, %DisplayMessage{}} on success
+    - {:error, :not_found} if no pending/executing tool call with this call_id exists
+    - {:error, changeset} on validation failure
+
+  ## Example
+      iex> fail_tool_call("call_123", %{"error" => "Permission denied"})
+      {:ok, %DisplayMessage{status: "failed", metadata: %{"error" => ...}}}
+  """
+  @spec fail_tool_call(String.t(), map()) ::
+          {:ok, DisplayMessage.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def fail_tool_call(call_id, error_info \\ %{}) do
+    query =
+      from(m in DisplayMessage,
+        where: fragment("?->>'call_id' = ?", m.content, ^call_id),
+        where: m.content_type == "tool_call",
+        where: m.status in ["pending", "executing", "interrupted"]
+      )
+
+    case repo().one(query) do
+      nil ->
+        {:error, :not_found}
+
+      message ->
+        updated_metadata = Map.merge(message.metadata, error_info)
+
+        message
+        |> DisplayMessage.changeset(%{
+          "status" => "failed",
+          "metadata" => updated_metadata
+        })
+        |> repo().update()
+    end
+  end
+
+  @doc """
+  Updates a tool call message to "interrupted" status and adds interrupt information.
+
+  This is called when a tool execution is interrupted (e.g., sub-agent HITL).
+  Accepts tool calls in "pending" or "executing" status.
+
+  ## Parameters
+    - call_id: The tool call ID
+    - interrupt_info: Map containing interrupt details (e.g., %{"display_text" => "Sub-agent awaiting approval"})
+
+  ## Returns
+    - {:ok, %DisplayMessage{}} on success
+    - {:error, :not_found} if no pending/executing tool call with this call_id exists
+    - {:error, changeset} on validation failure
+  """
+  @spec interrupt_tool_call(String.t(), map()) ::
+          {:ok, DisplayMessage.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def interrupt_tool_call(call_id, interrupt_info \\ %{}) do
+    query =
+      from(m in DisplayMessage,
+        where: fragment("?->>'call_id' = ?", m.content, ^call_id),
+        where: m.content_type == "tool_call",
+        where: m.status in ["pending", "executing"]
+      )
+
+    case repo().one(query) do
+      nil ->
+        {:error, :not_found}
+
+      message ->
+        updated_metadata = Map.merge(message.metadata, interrupt_info)
+
+        message
+        |> DisplayMessage.changeset(%{
+          "status" => "interrupted",
+          "metadata" => updated_metadata
+        })
+        |> repo().update()
+    end
+  end
+
+  @doc """
+  Records an HITL decision (approved/rejected) on a tool call display message.
+
+  Adds `"hitl_decision"` to the tool call's metadata so the UI can display
+  a discreet indicator of what the user decided. The metadata persists through
+  subsequent status transitions (executing → completed/failed) since those
+  operations merge metadata.
+
+  ## Parameters
+    - call_id: The tool call ID
+    - decision: "approved" or "rejected"
+
+  ## Returns
+    - {:ok, %DisplayMessage{}} on success
+    - {:error, :not_found} if no tool call with this call_id exists
+    - {:error, changeset} on validation failure
+  """
+  @spec record_hitl_decision(String.t(), String.t()) ::
+          {:ok, DisplayMessage.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def record_hitl_decision(call_id, decision) when decision in ["approved", "rejected"] do
+    # Update tool_call display message metadata
+    tool_call_query =
+      from(m in DisplayMessage,
+        where: fragment("?->>'call_id' = ?", m.content, ^call_id),
+        where: m.content_type == "tool_call"
+      )
+
+    result =
+      case repo().one(tool_call_query) do
+        nil ->
+          {:error, :not_found}
+
+        message ->
+          updated_metadata = Map.put(message.metadata, "hitl_decision", decision)
+
+          message
+          |> DisplayMessage.changeset(%{"metadata" => updated_metadata})
+          |> repo().update()
+      end
+
+    # Also stamp the matching tool_result display message content
+    tool_result_query =
+      from(m in DisplayMessage,
+        where: fragment("?->>'tool_call_id' = ?", m.content, ^call_id),
+        where: m.content_type == "tool_result"
+      )
+
+    case repo().one(tool_result_query) do
+      nil ->
+        :ok
+
+      tr_msg ->
+        updated_content = Map.put(tr_msg.content, "hitl_decision", decision)
+
+        tr_msg
+        |> DisplayMessage.changeset(%{"content" => updated_content})
+        |> repo().update()
+    end
+
+    result
+  end
+
+  @doc """
+  Resolves an interrupted tool result display message after a sub-agent resumes.
+
+  Finds a tool_result display message matching the given tool_call_id where
+  is_interrupt is true in the content JSON, and updates it to clear the interrupt
+  flag and replace the content with the actual result.
+
+  ## Parameters
+    - tool_call_id: The tool call ID to find the matching tool result
+    - result_content: The actual result content string to replace the interrupt placeholder
+
+  ## Returns
+    - {:ok, %DisplayMessage{}} on success
+    - {:error, :not_found} if no matching interrupted tool result exists
+    - {:error, changeset} on validation failure
+  """
+  @spec resolve_interrupted_tool_result(String.t(), String.t()) ::
+          {:ok, DisplayMessage.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def resolve_interrupted_tool_result(tool_call_id, result_content) do
+    query =
+      from(m in DisplayMessage,
+        where: fragment("?->>'tool_call_id' = ?", m.content, ^tool_call_id),
+        where: m.content_type == "tool_result",
+        where: fragment("(?->>'is_interrupt')::boolean = true", m.content)
+      )
+
+    case repo().one(query) do
+      nil ->
+        {:error, :not_found}
+
+      message ->
+        updated_content =
+          message.content
+          |> Map.put("is_interrupt", false)
+          |> Map.put("content", result_content)
+
+        message
+        |> DisplayMessage.changeset(%{"content" => updated_content})
+        |> repo().update()
+    end
+  end
+
+  @doc """
+  Searches message content across all types.
+
+  Requires scope for security. Searches within all conversations
+  accessible to the given scope.
+
+  ## Examples
+
+      search_messages(scope, "quarterly report")
+  """
+  def search_messages(%{} = scope, search_term) do
+    # Extract owner field from scope for security
+    owner_id = get_owner_id(scope)
+
+    from(m in DisplayMessage,
+      join: c in Conversation,
+      on: m.conversation_id == c.id,
+      where: c.user_id == ^owner_id,
+      where: fragment("?::text ILIKE ?", m.content, ^"%#{search_term}%")
+    )
+    |> repo().all()
+  end
+
+  #
+  # Private Helpers
+  #
+
+  # Example implementations:
+  #
+  # Single-user scope:
+  # defp scope_query(query, %{user_id: user_id}) do
+  #   from q in query, where: q.user_id == ^user_id
+  # end
+  #
+  # Multi-tenant (organization):
+  # defp scope_query(query, %{organization_id: org_id}) do
+  #   from q in query, where: q.organization_id == ^org_id
+  # end
+  #
+  # Team-based:
+  # defp scope_query(query, %{team_id: team_id}) do
+  #   from q in query, where: q.team_id == ^team_id
+  # end
+  #
+  defp scope_query(query, scope) do
+    owner_id = get_owner_id(scope)
+    from(q in query, where: q.user_id == ^owner_id)
+  end
+
+  # Extracts the owner ID from the scope struct.
+  #
+  # This default assumes your Scope has a `user` field containing
+  # a struct with an `id` field. Customize if your Scope has a different structure:
+  #
+  # Examples:
+  # defp get_owner_id(%{user: user}), do: user.id  # struct with id
+  # defp get_owner_id(%{user_id: id}), do: id                    # direct ID field
+  # defp get_owner_id(%{current_user_id: id}), do: id            # current_ prefix
+  #
+  defp get_owner_id(%{user: user}), do: user.id
+  defp repo(), do: Application.get_env(:agentic_runtime, :repo)
+end

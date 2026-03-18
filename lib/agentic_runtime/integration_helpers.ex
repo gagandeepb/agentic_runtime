@@ -1,0 +1,758 @@
+defmodule AgenticRuntime.IntegrationHelpers do
+  @moduledoc """
+  Reusable helpers for agent event handling and state management in LiveView.
+
+  This module provides two main categories of helpers:
+
+  ## 1. State Management Helpers
+
+  Helpers that manage agent-related socket assigns, reducing boilerplate in mount/3
+  and handle_params/3:
+
+  - `init_agent_state/1` - Initialize all agent assigns to defaults
+  - `load_conversation/3` - Load conversation and set up complete agent state
+  - `reset_conversation/1` - Reset all agent state to defaults
+
+  ## 2. Event Handlers
+
+  Helpers for handling agent PubSub events in handle_info/2:
+
+  - Status change handlers (running, idle, cancelled, interrupted, error)
+  - Message handlers (LLM deltas, message complete, display messages)
+  - Tool execution handlers (identified, started, completed, failed)
+  - Lifecycle handlers (title generated, agent shutdown)
+
+  ## Usage Example
+
+  ### In mount/3
+
+      @impl true
+      def mount(_params, _session, socket) do
+        {:ok,
+         socket
+         |> AgentLiveHelpers.init_agent_state()
+         |> assign(:input, "")
+         |> assign(:sidebar_collapsed, false)
+         # ... other app-specific assigns
+        }
+      end
+
+  ### In handle_params/3
+
+      @impl true
+      def handle_params(%{"conversation_id" => id}, _uri, socket) do
+        case AgentLiveHelpers.load_conversation(
+          socket,
+          id,
+          scope: socket.assigns.current_scope,
+          user_id: socket.assigns.current_scope.user.id
+        ) do
+          {:ok, socket} -> {:noreply, socket}
+          {:error, socket} -> {:noreply, push_navigate(socket, to: ~p"/chat")}
+        end
+      end
+
+  ### In handle_info/2
+
+      @impl true
+      def handle_info({:agent, {:status_changed, :running, nil}}, socket) do
+        {:noreply, AgentLiveHelpers.handle_status_running(socket)}
+      end
+
+  ## Customization
+
+  This module was generated for your application and has hardcoded references to:
+  - `AgenticRuntime.Conversations` - Database context
+  - `AgenticRuntime.Agents.Coordinator` - Agent coordination
+  - `Sagents.AgentServer` - Agent server module
+
+  You can customize message formatting, error handling, and logging by editing
+  the generated functions directly.
+  """
+
+  import Phoenix.LiveView, only: [stream: 4, stream_insert: 3, put_flash: 3, connected?: 1]
+  import Phoenix.Component, only: [assign: 3]
+
+  alias AgenticRuntime.Conversations
+  alias AgenticRuntime.Agents.Coordinator
+  alias Sagents.AgentServer
+  alias LangChain.MessageDelta
+  alias LangChain.Message.ToolCall
+
+  require Logger
+
+  # === STATE MANAGEMENT HELPERS ===
+
+  @doc """
+  Initialize all agent-related assigns to their default empty state.
+
+  This should be called in `mount/3` to set up all agent-related assigns
+  with proper defaults. It initializes both core agent state (conversation,
+  agent_id, status) and streaming state (deltas, pending tools).
+
+  ## Returns
+
+  Updated socket with all agent assigns initialized to defaults.
+
+  ## Example
+
+      def mount(_params, _session, socket) do
+        {:ok,
+         socket
+         |> AgentLiveHelpers.init_agent_state()
+         |> assign(:input, "")
+         |> assign(:sidebar_collapsed, false)
+         # ... other app-specific assigns
+        }
+      end
+
+  ## Assigns Set
+
+  - `:conversation` - nil
+  - `:conversation_id` - nil
+  - `:agent_id` - nil
+  - `:agent_status` - :not_running
+  - `:todos` - []
+  - `:has_messages` - false
+  - `:streaming_delta` - nil
+  - `:loading` - false
+  - `:pending_tools` - []
+  - `:interrupt_data` - nil
+  - `:hitl_decisions` - []
+  - `:messages` stream - empty (reset: true)
+  """
+  def init_agent_state(socket) do
+    socket
+    |> assign(:conversation, nil)
+    |> assign(:conversation_id, nil)
+    |> assign(:agent_id, nil)
+    |> assign(:agent_status, :not_running)
+    |> assign(:todos, [])
+    |> assign(:has_messages, false)
+    |> assign(:streaming_delta, nil)
+    |> assign(:loading, false)
+    |> assign(:pending_tools, [])
+    |> assign(:interrupt_data, nil)
+    |> assign(:hitl_decisions, [])
+    |> stream(:messages, [], reset: true)
+  end
+
+  @doc """
+  Load a conversation from the database and set up all agent-related state.
+
+  Handles the complete workflow for loading a conversation:
+  1. Unsubscribes from previous conversation (if switching)
+  2. Loads conversation from database
+  3. Computes agent_id from conversation_id
+  4. Subscribes to agent PubSub events (if connected)
+  5. Tracks user presence (if connected and user_id provided)
+  6. Loads display messages and todos from database
+  7. Checks if agent is running and gets its status
+  8. Updates socket assigns with all loaded data
+
+  ## Parameters
+
+  - `socket` - The LiveView socket
+  - `conversation_id` - ID of the conversation to load
+  - `opts` - Keyword list of options:
+    - `:scope` (required) - User scope for database queries (e.g., `{:user, 1}`)
+    - `:user_id` (optional) - User ID for presence tracking
+    - `:conversations_module` (optional) - Module to use for DB operations (default: Conversations)
+
+  ## Returns
+
+  - `{:ok, socket}` - Socket with conversation loaded and all agent state set
+  - `{:error, socket}` - Socket with flash error (when conversation not found)
+
+  ## Example
+
+      def handle_params(%{"conversation_id" => conversation_id}, _uri, socket) do
+        case AgentLiveHelpers.load_conversation(
+          socket,
+          conversation_id,
+          scope: socket.assigns.current_scope,
+          user_id: socket.assigns.current_scope.user.id
+        ) do
+          {:ok, socket} ->
+            # Conversation loaded successfully
+            {:noreply, socket}
+
+          {:error, socket} ->
+            # Conversation not found - navigate to fresh state
+            {:noreply, push_navigate(socket, to: ~p"/chat")}
+        end
+      end
+
+  ## Notes
+
+  - Does NOT navigate on error - calling code handles navigation
+  - Does NOT set page_title - that's application-specific
+  - Conversation is available in assigns for building page title
+  """
+  def load_conversation(socket, conversation_id, opts) do
+    scope = Keyword.fetch!(opts, :scope)
+    user_id = Keyword.get(opts, :user_id)
+    conversations = Keyword.get(opts, :conversations_module, Conversations)
+
+    try do
+      # Unsubscribe from previous conversation if switching
+      socket = maybe_unsubscribe_previous(socket, conversation_id)
+
+      # Load conversation from database
+      conversation = conversations.get_conversation!(scope, conversation_id)
+      agent_id = Coordinator.conversation_agent_id(conversation_id)
+
+      # Subscribe to agent events and track presence
+      socket = maybe_subscribe_and_track(socket, conversation_id, user_id)
+
+      # Load display messages and todos
+      display_messages = conversations.load_display_messages(conversation_id)
+      has_messages = !Enum.empty?(display_messages)
+      saved_todos = conversations.load_todos(conversation_id)
+
+      # Check if agent is already running
+      agent_status = AgentServer.get_status(agent_id)
+
+      # Update socket with all loaded data
+      socket =
+        socket
+        |> assign(:conversation, conversation)
+        |> assign(:conversation_id, conversation_id)
+        |> assign(:agent_id, agent_id)
+        |> assign(:todos, saved_todos)
+        |> assign(:agent_status, agent_status)
+        |> stream(:messages, display_messages, reset: true)
+        |> assign(:has_messages, has_messages)
+
+      # Restore HITL state if agent is interrupted (e.g. after LiveView reconnect)
+      socket =
+        if agent_status == :interrupted do
+          info = AgentServer.get_info(agent_id)
+          handle_status_interrupted(socket, info.interrupt_data)
+        else
+          socket
+        end
+
+      {:ok, socket}
+    rescue
+      Ecto.NoResultsError ->
+        socket =
+          socket
+          |> put_flash(:error, "Conversation not found")
+
+        {:error, socket}
+    end
+  end
+
+  @doc """
+  Reset all agent-related state to default values and clean up subscriptions.
+
+  Calls `init_agent_state/1` internally to reset all assigns to defaults,
+  and unsubscribes from the current conversation if connected.
+
+  ## Parameters
+
+  - `socket` - The LiveView socket
+
+  ## Returns
+
+  Updated socket with all agent state reset to defaults.
+
+  ## Example
+
+      def handle_event("new_thread", _params, socket) do
+        socket =
+          socket
+          |> AgentLiveHelpers.reset_conversation()
+          |> push_patch(to: ~p"/chat")
+
+        {:noreply, socket}
+      end
+
+  ## Notes
+
+  - Does NOT set page_title - that's application-specific
+  - Presence tracking is automatically cleaned up on process termination
+  """
+  def reset_conversation(socket) do
+    # Unsubscribe from current conversation if connected
+    if connected?(socket) && socket.assigns[:conversation_id] do
+      :ok = Coordinator.unsubscribe_from_conversation(socket.assigns.conversation_id)
+      Logger.debug("Unsubscribed from conversation #{socket.assigns.conversation_id}")
+    end
+
+    # Reset all agent assigns to defaults
+    init_agent_state(socket)
+  end
+
+  # === PRIVATE HELPERS FOR STATE MANAGEMENT ===
+
+  defp maybe_unsubscribe_previous(socket, conversation_id) do
+    if connected?(socket) && socket.assigns[:conversation_id] &&
+         socket.assigns.conversation_id != conversation_id do
+      :ok = Coordinator.unsubscribe_from_conversation(socket.assigns.conversation_id)
+      Logger.debug("Unsubscribed from previous conversation #{socket.assigns.conversation_id}")
+    end
+
+    socket
+  end
+
+  defp maybe_subscribe_and_track(socket, conversation_id, user_id) do
+    if connected?(socket) do
+      :ok = Coordinator.ensure_subscribed_to_conversation(conversation_id)
+
+      if user_id do
+        case Coordinator.track_conversation_viewer(conversation_id, user_id) do
+          {:ok, _ref} ->
+            :ok
+
+          {:error, {:already_tracked, _, _, _}} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("Failed to track presence: #{inspect(reason)}")
+            :ok
+        end
+      end
+    end
+
+    socket
+  end
+
+  # === STATUS CHANGE HANDLERS ===
+
+  @doc """
+  Handles agent status change to :running.
+
+  Sets agent_status assign to :running to show loading state in UI.
+  """
+  def handle_status_running(socket) do
+    assign(socket, :agent_status, :running)
+  end
+
+  @doc """
+  Handles agent status change to :idle (execution completed successfully).
+
+  Updates status and clears loading state.
+  """
+  def handle_status_idle(socket) do
+    socket
+    |> assign(:loading, false)
+    |> assign(:agent_status, :idle)
+    |> assign(:streaming_delta, nil)
+  end
+
+  @doc """
+  Handles agent status change to :cancelled (user cancelled execution).
+
+  Creates a cancellation message, updates status, clears loading and streaming state.
+
+  Note: Does NOT persist agent state after cancellation because the state may be
+  inconsistent or incomplete after the task was killed.
+  """
+  def handle_status_cancelled(socket) do
+    cancellation_text = "_Agent execution cancelled by user. Partial response discarded._"
+
+    cancellation_message =
+      create_or_persist_message(
+        socket,
+        :assistant,
+        cancellation_text
+      )
+
+    socket
+    |> assign(:loading, false)
+    |> assign(:agent_status, :cancelled)
+    |> assign(:streaming_delta, nil)
+    |> stream_insert(:messages, cancellation_message)
+  end
+
+  @doc """
+  Handles agent status change to :error (execution failed).
+
+  The error message is persisted as a display message by AgentServer and arrives
+  via `{:display_message_saved, ...}`. This handler just updates UI state and
+  shows a flash notification.
+  """
+  def handle_status_error(socket, reason) do
+    error_text = format_error_message(reason)
+
+    socket
+    |> assign(:loading, false)
+    |> assign(:agent_status, :error)
+    |> assign(:streaming_delta, nil)
+    |> put_flash(:error, error_text)
+  end
+
+  @doc """
+  Handles agent status change to :interrupted (waiting for human approval).
+
+  Extracts action requests from interrupt data and updates status.
+  """
+  def handle_status_interrupted(socket, interrupt_data) do
+    action_requests = extract_action_requests(interrupt_data)
+
+    socket
+    |> assign(:loading, false)
+    |> assign(:agent_status, :interrupted)
+    |> assign(:pending_tools, action_requests)
+    |> assign(:interrupt_data, interrupt_data)
+  end
+
+  # Sub-agent HITL: action_requests are nested inside interrupt_data.interrupt_data
+  defp extract_action_requests(%{type: :subagent_hitl, interrupt_data: inner}) do
+    Map.get(inner, :action_requests, [])
+  end
+
+  # Direct HITL: action_requests are at the top level
+  defp extract_action_requests(interrupt_data) do
+    Map.get(interrupt_data, :action_requests, [])
+  end
+
+  # === MESSAGING HANDLERS ===
+
+  @doc """
+  Handles streaming LLM deltas (incremental response chunks).
+
+  Merges deltas into the accumulated streaming message and enriches with
+  tool display information using early detection pattern.
+  """
+  def handle_llm_deltas(socket, deltas) do
+    update_streaming_message(socket, deltas)
+  end
+
+  @doc """
+  Handles complete LLM message received.
+
+  Clears streaming delta unless there are pending tool calls, which need
+  to stay visible until tools finish executing.
+  """
+  def handle_llm_message_complete(socket) do
+    # Clear streaming_delta - persisted display messages (from display_message_saved)
+    # are now the authoritative display. Tool execution status is tracked via
+    # database updates and stream_inserts in the tool execution handlers.
+    socket
+    |> assign(:streaming_delta, nil)
+    |> assign(:loading, false)
+  end
+
+  @doc """
+  Handles single display message saved to database.
+
+  Reloads messages from database if conversation exists, otherwise inserts
+  the message into the stream directly.
+  """
+  def handle_display_message_saved(socket, display_msg) do
+    socket =
+      if socket.assigns[:conversation_id] do
+        # Clear streaming_delta - persisted messages are now the authoritative display.
+        # All display messages are saved to DB before broadcasting, so reload gets them all.
+        socket
+        |> assign(:streaming_delta, nil)
+        |> reload_messages_from_db()
+      else
+        stream_insert(socket, :messages, display_msg)
+      end
+
+    assign(socket, :has_messages, true)
+  end
+
+  # === TOOL EXECUTION HANDLERS ===
+
+  @doc """
+  Handles tool call identified event.
+
+  Sets display_text directly on the matching ToolCall in the streaming delta
+  and tracks the tool's execution status.
+  """
+  def handle_tool_call_identified(socket, tool_info) do
+    current_delta = socket.assigns[:streaming_delta]
+
+    updated_delta =
+      if current_delta do
+        current_delta
+        |> set_tool_display_text(tool_info.name, tool_info[:display_text])
+        |> set_tool_execution_status(tool_info.name, "identified")
+      else
+        # Non-streaming or delta not yet received — create minimal delta
+        tc = %ToolCall{
+          name: tool_info.name,
+          call_id: tool_info[:call_id],
+          display_text: tool_info[:display_text],
+          status: :incomplete,
+          metadata: %{"execution_status" => "identified"}
+        }
+
+        %MessageDelta{role: :assistant, status: :incomplete, tool_calls: [tc]}
+      end
+
+    assign(socket, :streaming_delta, updated_delta)
+  end
+
+  @doc """
+  Handles consolidated tool execution update event.
+
+  Updates streaming delta with tool execution status. No database calls —
+  persistence is handled by AgentServer via DisplayMessagePersistence.
+  """
+  def handle_tool_execution_update(socket, status, tool_info) do
+    current_delta = socket.assigns[:streaming_delta]
+
+    updated_delta =
+      case {current_delta, status} do
+        {nil, _} ->
+          nil
+
+        {delta, :executing} ->
+          delta
+          |> set_tool_display_text(tool_info.name, tool_info[:display_text])
+          |> set_tool_execution_status(tool_info.name, "executing")
+
+        {_delta, _completed_or_failed} ->
+          # Tool finished — clear the streaming delta
+          nil
+      end
+
+    assign(socket, :streaming_delta, updated_delta)
+  end
+
+  @doc """
+  Handles display message updated event (from persistence layer).
+
+  Updates the message in the stream — no DB call needed since the
+  updated record comes from the AgentServer broadcast.
+  """
+  def handle_display_message_updated(socket, updated_msg) do
+    stream_insert(socket, :messages, updated_msg)
+  end
+
+  # === LIFECYCLE HANDLERS ===
+
+  @doc """
+  Handles conversation title generated event.
+
+  Updates conversation title in database and persists agent state with new title
+  in metadata.
+
+  Note: Page title formatting and conversation list updates are left to the
+  calling LiveView as they are application-specific UI concerns.
+
+  Returns the updated conversation in the socket assigns so the calling LiveView
+  can update other UI elements as needed.
+  """
+  def handle_conversation_title_generated(socket, new_title, agent_id) do
+    # Only process if it's for our agent
+    if agent_id == socket.assigns[:agent_id] && socket.assigns[:conversation] do
+      case Conversations.update_conversation(socket.assigns.conversation, %{title: new_title}) do
+        {:ok, updated_conversation} ->
+          # Agent state persistence is handled by AgentServer via AgentPersistence behaviour
+          assign(socket, :conversation, updated_conversation)
+
+        {:error, reason} ->
+          Logger.error("Failed to update conversation title: #{inspect(reason)}")
+          socket
+      end
+    else
+      socket
+    end
+  end
+
+  @doc """
+  Handles agent shutdown event.
+
+  Clears agent_id from assigns. The next interaction will restart the agent
+  via Coordinator.
+  """
+  def handle_agent_shutdown(socket, shutdown_data) do
+    Logger.info("Agent #{socket.assigns[:agent_id]} shutting down: #{shutdown_data.reason}")
+    assign(socket, :agent_id, nil)
+  end
+
+  # === CORE HELPER FUNCTIONS ===
+
+  @doc """
+  Accumulates streaming deltas into the current streaming message.
+
+  Tool display information (display_text) is set on ToolCall structs by
+  LLMChain during merge_delta. The :on_tool_call_identified callback then
+  fires and is handled by `handle_tool_call_identified/2`, which updates
+  the streaming delta's tool calls with display_text directly.
+  """
+  def update_streaming_message(socket, deltas) do
+    current_delta = socket.assigns.streaming_delta
+    updated_delta = MessageDelta.merge_deltas(current_delta, deltas)
+
+    assign(socket, :streaming_delta, updated_delta)
+  end
+
+  @doc """
+  Reloads display messages from the database and updates the stream.
+
+  Uses reset: true to ensure proper ordering and clean state.
+  """
+  def reload_messages_from_db(socket) do
+    if socket.assigns[:conversation_id] do
+      messages = Conversations.load_display_messages(socket.assigns.conversation_id)
+      stream(socket, :messages, messages, reset: true)
+    else
+      socket
+    end
+  end
+
+  @doc """
+  Creates a message in database if conversation exists, otherwise creates in-memory fallback.
+
+  This ensures the UI always shows a message even if database persistence fails.
+
+  Returns the message map (not the socket).
+  """
+  def create_or_persist_message(socket, message_type, text) do
+    if socket.assigns[:conversation_id] do
+      case Conversations.append_text_message(
+             socket.assigns.conversation_id,
+             message_type,
+             text
+           ) do
+        {:ok, display_msg} ->
+          display_msg
+
+        {:error, reason} ->
+          Logger.error("Failed to persist #{message_type} message: #{inspect(reason)}")
+          create_fallback_message(message_type, text)
+      end
+    else
+      create_fallback_message(message_type, text)
+    end
+  end
+
+  # === HITL DECISION HANDLERS ===
+
+  @doc """
+  Handles a single HITL approve/reject decision.
+
+  Accumulates decisions and only resumes the agent once all pending tools are decided.
+  Returns the updated socket (caller wraps in `{:noreply, socket}`).
+
+  ## Parameters
+
+  - `socket` - The LiveView socket
+  - `index` - Index of the tool in pending_tools to decide on
+  - `decision_type` - `:approve` or `:reject`
+
+  ## Example
+
+      def handle_event("approve_tool", %{"index" => index_str}, socket) do
+        {:noreply, AgentLiveHelpers.handle_hitl_decision(socket, String.to_integer(index_str), :approve)}
+      end
+  """
+  def handle_hitl_decision(socket, index, decision_type) do
+    pending_tools = socket.assigns.pending_tools
+    decision_label = if decision_type == :approve, do: "approved", else: "rejected"
+
+    # Record decision on the display message for UI indicator
+    persist_hitl_decision(socket, pending_tools, index, decision_label)
+
+    Logger.info("#{String.capitalize(decision_label)} tool at index #{index}")
+
+    # Accumulate this decision and remove the tool from pending
+    accumulated = (socket.assigns[:hitl_decisions] || []) ++ [%{type: decision_type}]
+    remaining_tools = List.delete_at(pending_tools, index)
+
+    if remaining_tools == [] do
+      # All tools decided — resume the agent with the full decisions list
+      case AgentServer.resume(socket.assigns.agent_id, accumulated) do
+        :ok ->
+          socket
+          |> assign(:agent_status, :running)
+          |> assign(:loading, true)
+          |> assign(:pending_tools, [])
+          |> assign(:interrupt_data, nil)
+          |> assign(:hitl_decisions, [])
+          |> put_flash(:info, "Agent resuming")
+
+        {:error, reason} ->
+          Logger.error("Failed to resume agent: #{inspect(reason)}")
+          put_flash(socket, :error, "Failed to resume agent: #{inspect(reason)}")
+      end
+    else
+      # More tools to decide — update UI to show the next one
+      socket
+      |> assign(:pending_tools, remaining_tools)
+      |> assign(:hitl_decisions, accumulated)
+    end
+  end
+
+  # Persist HITL decision on the correct tool call display message.
+  # For sub-agent HITL, the action_request's tool_call_id belongs to the sub-agent's
+  # inner tool call, not the parent's "task" tool call. Use the parent's tool_call_id
+  # from the top-level interrupt_data instead.
+  defp persist_hitl_decision(socket, pending_tools, index, decision) do
+    interrupt_data = socket.assigns[:interrupt_data]
+    tool = Enum.at(pending_tools, index)
+
+    call_id =
+      case interrupt_data do
+        %{type: :subagent_hitl, tool_call_id: parent_call_id} -> parent_call_id
+        _ -> tool[:tool_call_id]
+      end
+
+    if call_id do
+      Conversations.record_hitl_decision(call_id, decision)
+    end
+  end
+
+  # === PRIVATE HELPERS ===
+
+  defp create_fallback_message(message_type, text) do
+    %{
+      id: generate_id(),
+      message_type: message_type,
+      content_type: "text",
+      content: %{"text" => text},
+      timestamp: DateTime.utc_now()
+    }
+  end
+
+  defp generate_id do
+    :crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)
+  end
+
+  defp format_error_message(reason) do
+    error_display =
+      case reason do
+        %LangChain.LangChainError{} = error -> error.message
+        other -> inspect(other)
+      end
+
+    "Sorry, I encountered an error: #{error_display}"
+  end
+
+  # Set display_text on matching ToolCall(s) in a delta's tool_calls list.
+  # Only updates tool calls that don't already have display_text set.
+  defp set_tool_display_text(delta, tool_name, display_text) do
+    updated_tool_calls =
+      Enum.map(delta.tool_calls || [], fn tc ->
+        if tc.name == tool_name && tc.display_text == nil do
+          %{tc | display_text: display_text}
+        else
+          tc
+        end
+      end)
+
+    %{delta | tool_calls: updated_tool_calls}
+  end
+
+  # Set execution_status on matching ToolCall(s) in a delta's tool_calls list.
+  defp set_tool_execution_status(delta, tool_name, status) do
+    updated_tool_calls =
+      Enum.map(delta.tool_calls || [], fn tc ->
+        if tc.name == tool_name do
+          ToolCall.set_execution_status(tc, status)
+        else
+          tc
+        end
+      end)
+
+    %{delta | tool_calls: updated_tool_calls}
+  end
+end
