@@ -12,7 +12,7 @@ defmodule AgenticRuntime do
   @doc """
   Required opts: 
   * model_config
-  * base_system_prompt
+  * base_system_prompt (text)
   * tools 
   """
   defdelegate create_agent(opts), to: Factory
@@ -20,6 +20,8 @@ defmodule AgenticRuntime do
   defdelegate build_new_user_message!(message_text), to: LangChain.Message, as: :new_user!
   defdelegate add_message(agent_id, langchain_message), to: Sagents.AgentServer
   defdelegate cancel_agent_execution(agent_id), to: Sagents.AgentServer, as: :cancel
+  
+  defdelegate new_tool!(function_schema), to: LangChain.Function, as: :new!
 
   # Channel helpers
   # See AgenticRuntime.IntegrationHelpers
