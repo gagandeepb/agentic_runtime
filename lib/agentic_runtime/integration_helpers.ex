@@ -70,8 +70,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
   the generated functions directly.
   """
 
-  import Phoenix.LiveView, only: [stream: 4, stream_insert: 3, put_flash: 3, connected?: 1]
-  import Phoenix.Component, only: [assign: 3]
+  import Phoenix.Socket, only: [assign: 3]
 
   alias AgenticRuntime.Conversations
   alias AgenticRuntime.Agents.Coordinator
@@ -134,7 +133,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
     |> assign(:pending_tools, [])
     |> assign(:interrupt_data, nil)
     |> assign(:hitl_decisions, [])
-    |> stream(:messages, [], reset: true)
+    |> assign(:messages, [])
   end
 
   @doc """
@@ -221,7 +220,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
         |> assign(:agent_id, agent_id)
         |> assign(:todos, saved_todos)
         |> assign(:agent_status, agent_status)
-        |> stream(:messages, display_messages, reset: true)
+        |> assign(:messages, display_messages)
         |> assign(:has_messages, has_messages)
 
       # Restore HITL state if agent is interrupted (e.g. after LiveView reconnect)
@@ -238,7 +237,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
       Ecto.NoResultsError ->
         socket =
           socket
-          |> put_flash(:error, "Conversation not found")
+          |> assign(:put_flash, "Error: Conversation not found")
 
         {:error, socket}
     end
@@ -276,7 +275,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
   """
   def reset_conversation(socket) do
     # Unsubscribe from current conversation if connected
-    if connected?(socket) && socket.assigns[:conversation_id] do
+    if  socket.assigns[:conversation_id] do
       :ok = Coordinator.unsubscribe_from_conversation(socket.assigns.conversation_id)
       Logger.debug("Unsubscribed from conversation #{socket.assigns.conversation_id}")
     end
@@ -288,7 +287,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
   # === PRIVATE HELPERS FOR STATE MANAGEMENT ===
 
   defp maybe_unsubscribe_previous(socket, conversation_id) do
-    if connected?(socket) && socket.assigns[:conversation_id] &&
+    if  socket.assigns[:conversation_id] &&
          socket.assigns.conversation_id != conversation_id do
       :ok = Coordinator.unsubscribe_from_conversation(socket.assigns.conversation_id)
       Logger.debug("Unsubscribed from previous conversation #{socket.assigns.conversation_id}")
@@ -298,7 +297,6 @@ defmodule AgenticRuntime.IntegrationHelpers do
   end
 
   defp maybe_subscribe_and_track(socket, conversation_id, user_id) do
-    if connected?(socket) do
       :ok = Coordinator.ensure_subscribed_to_conversation(conversation_id)
 
       if user_id do
@@ -314,7 +312,6 @@ defmodule AgenticRuntime.IntegrationHelpers do
             :ok
         end
       end
-    end
 
     socket
   end
@@ -364,7 +361,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
     |> assign(:loading, false)
     |> assign(:agent_status, :cancelled)
     |> assign(:streaming_delta, nil)
-    |> stream_insert(:messages, cancellation_message)
+    |> assign(:messages, cancellation_message)
   end
 
   @doc """
@@ -381,7 +378,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
     |> assign(:loading, false)
     |> assign(:agent_status, :error)
     |> assign(:streaming_delta, nil)
-    |> put_flash(:error, error_text)
+    |> assign(:put_flash, "Error: #{error_text}")
   end
 
   @doc """
@@ -451,7 +448,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
         |> assign(:streaming_delta, nil)
         |> reload_messages_from_db()
       else
-        stream_insert(socket, :messages, display_msg)
+        assign(socket, :messages, display_msg)
       end
 
     assign(socket, :has_messages, true)
@@ -523,7 +520,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
   updated record comes from the AgentServer broadcast.
   """
   def handle_display_message_updated(socket, updated_msg) do
-    stream_insert(socket, :messages, updated_msg)
+    assign(socket, :messages, updated_msg)
   end
 
   # === LIFECYCLE HANDLERS ===
@@ -593,7 +590,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
   def reload_messages_from_db(socket) do
     if socket.assigns[:conversation_id] do
       messages = Conversations.load_display_messages(socket.assigns.conversation_id)
-      stream(socket, :messages, messages, reset: true)
+      assign(socket, :messages, messages)
     else
       socket
     end
@@ -668,11 +665,11 @@ defmodule AgenticRuntime.IntegrationHelpers do
           |> assign(:pending_tools, [])
           |> assign(:interrupt_data, nil)
           |> assign(:hitl_decisions, [])
-          |> put_flash(:info, "Agent resuming")
+          |> assign(:put_flash, "Info: Agent resuming")
 
         {:error, reason} ->
           Logger.error("Failed to resume agent: #{inspect(reason)}")
-          put_flash(socket, :error, "Failed to resume agent: #{inspect(reason)}")
+          assign(socket, :put_flash, "Error: Failed to resume agent: #{inspect(reason)}")
       end
     else
       # More tools to decide — update UI to show the next one
