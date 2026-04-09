@@ -275,7 +275,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
   """
   def reset_conversation(socket) do
     # Unsubscribe from current conversation if connected
-    if  socket.assigns[:conversation_id] do
+    if socket.assigns[:conversation_id] do
       :ok = Coordinator.unsubscribe_from_conversation(socket.assigns.conversation_id)
       Logger.debug("Unsubscribed from conversation #{socket.assigns.conversation_id}")
     end
@@ -287,7 +287,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
   # === PRIVATE HELPERS FOR STATE MANAGEMENT ===
 
   defp maybe_unsubscribe_previous(socket, conversation_id) do
-    if  socket.assigns[:conversation_id] &&
+    if socket.assigns[:conversation_id] &&
          socket.assigns.conversation_id != conversation_id do
       :ok = Coordinator.unsubscribe_from_conversation(socket.assigns.conversation_id)
       Logger.debug("Unsubscribed from previous conversation #{socket.assigns.conversation_id}")
@@ -297,21 +297,21 @@ defmodule AgenticRuntime.IntegrationHelpers do
   end
 
   defp maybe_subscribe_and_track(socket, conversation_id, user_id) do
-      :ok = Coordinator.ensure_subscribed_to_conversation(conversation_id)
+    :ok = Coordinator.ensure_subscribed_to_conversation(conversation_id)
 
-      if user_id do
-        case Coordinator.track_conversation_viewer(conversation_id, user_id) do
-          {:ok, _ref} ->
-            :ok
+    if user_id do
+      case Coordinator.track_conversation_viewer(conversation_id, user_id) do
+        {:ok, _ref} ->
+          :ok
 
-          {:error, {:already_tracked, _, _, _}} ->
-            :ok
+        {:error, {:already_tracked, _, _, _}} ->
+          :ok
 
-          {:error, reason} ->
-            Logger.warning("Failed to track presence: #{inspect(reason)}")
-            :ok
-        end
+        {:error, reason} ->
+          Logger.warning("Failed to track presence: #{inspect(reason)}")
+          :ok
       end
+    end
 
     socket
   end
