@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: SUSE LLC
+# SPDX-License-Identifier: Apache-2.0
+
 defmodule AgenticRuntime.IntegrationHelpers do
   @moduledoc """
   Reusable helpers for agent event handling and state management in LiveView.

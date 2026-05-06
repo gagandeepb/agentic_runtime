@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: SUSE LLC
+# SPDX-License-Identifier: Apache-2.0
+
 defmodule AgenticRuntime.Agents.Coordinator do
   @moduledoc """
   Coordinates agent lifecycle for conversation-centric agents.
