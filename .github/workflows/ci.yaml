@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: SUSE LLC
+# SPDX-License-Identifier: Apache-2.0
+
+name: Continuous Integration
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "VERSION"
+      - "CHANGELOG.md"
+  pull_request:
+    types: [opened, synchronize, labeled]
+    paths-ignore:
+      - "VERSION"
+  workflow_dispatch:
+  workflow_call:
+  repository_dispatch:
+    types: [start-ci, deploy-demo]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  license-headers:
+    name: Ensure license headers are present and correct
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+      - name: Check license Headers
+        uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
