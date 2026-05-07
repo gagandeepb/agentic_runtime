@@ -16,7 +16,7 @@ defmodule AgenticRuntime.Conversations.Conversation do
   @foreign_key_type :binary_id
 
   schema "sagents_conversations" do
-    belongs_to(:user, AgenticRuntime.Accounts.User, foreign_key: :user_id, type: :id)
+    field(:user_id, :integer)
     has_one(:agent_state, AgentState)
     has_many(:display_messages, DisplayMessage)
 

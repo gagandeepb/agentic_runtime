@@ -2,16 +2,24 @@ defmodule AgenticRuntime.Conversations do
   @moduledoc """
   Context for conversation persistence with multi-content type support.
 
+  This module provides scoped access to conversations, agent states, and display
+  messages.
+
   ## Scope-Based Security
 
-  Every public function takes a `MyApp.Accounts.Scope` as its first argument.
-  Use it to limit access and actions to the caller's authorized data.
-  Wrong-scope callers receive `{:error, :not_found}`.
+  Every public function takes a scope as its first argument. Scopes are opaque to
+  the library — host applications must implement the `AgenticRuntime.Scope`
+  protocol on their own scope struct so this module can derive the owner id.
 
-  ## Customization Required
+  Wrong-scope callers receive `{:error, :not_found}` for tenant-isolated reads
+  and writes.
 
-  The generated code uses generic scope filtering. Customize `scope_query/2`,
-  `scope_conversation_query/2`, and `get_owner_id/1` to match your Scope struct.
+  ## Repo Configuration
+
+  The Ecto repo is resolved at runtime via `Application.get_env(:agentic_runtime, :repo)`.
+  Configure it in your host app:
+
+      config :agentic_runtime, repo: MyApp.Repo
 
   ## Multi-Content Type Support
 
@@ -21,11 +29,10 @@ defmodule AgenticRuntime.Conversations do
 
   import Ecto.Query, warn: false
   alias Sagents.Todo
-  alias AgenticRuntime.Repo
   alias AgenticRuntime.Conversations.AgentState
   alias AgenticRuntime.Conversations.Conversation
   alias AgenticRuntime.Conversations.DisplayMessage
-  alias MyApp.Accounts.Scope, as: Scope
+  alias AgenticRuntime.Scope
 
   #
   # Conversation CRUD
@@ -37,11 +44,11 @@ defmodule AgenticRuntime.Conversations do
   The conversation is automatically associated with the scope's owner.
   Accepts attrs with either atom or string keys.
   """
-  def create_conversation(%Scope{} = scope, attrs) do
+  def create_conversation(scope, attrs) do
     scope
-    |> get_owner_id()
+    |> Scope.owner_id()
     |> Conversation.create_changeset(attrs)
-    |> Repo.insert()
+    |> repo().insert()
   end
 
   @doc """
@@ -49,10 +56,10 @@ defmodule AgenticRuntime.Conversations do
 
   Raises if the conversation doesn't exist or doesn't belong to the scope.
   """
-  def get_conversation!(%Scope{} = scope, id) do
+  def get_conversation!(scope, id) do
     Conversation
     |> scope_query(scope)
-    |> Repo.get!(id)
+    |> repo().get!(id)
   end
 
   @doc """
@@ -60,10 +67,10 @@ defmodule AgenticRuntime.Conversations do
 
   Returns `{:ok, conversation}` or `{:error, :not_found}`.
   """
-  def get_conversation(%Scope{} = scope, id) do
+  def get_conversation(scope, id) do
     Conversation
     |> scope_query(scope)
-    |> Repo.get(id)
+    |> repo().get(id)
     |> case do
       nil -> {:error, :not_found}
       conversation -> {:ok, conversation}
@@ -78,7 +85,7 @@ defmodule AgenticRuntime.Conversations do
     * `:limit` - Maximum number of conversations to return (default: 50)
     * `:offset` - Number of conversations to skip (default: 0)
   """
-  def list_conversations(%Scope{} = scope, opts \\ []) do
+  def list_conversations(scope, opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
     offset = Keyword.get(opts, :offset, 0)
 
@@ -87,22 +94,22 @@ defmodule AgenticRuntime.Conversations do
     |> order_by([c], desc: c.updated_at)
     |> limit(^limit)
     |> offset(^offset)
-    |> Repo.all()
+    |> repo().all()
   end
 
   def update_conversation(%Conversation{} = conversation, attrs) do
     conversation
     |> Conversation.changeset(attrs)
-    |> Repo.update()
+    |> repo().update()
   end
 
   def delete_conversation(%Conversation{} = conversation) do
-    Repo.delete(conversation)
+    repo().delete(conversation)
   end
 
-  def delete_conversation(%Scope{} = scope, conversation_id) when is_binary(conversation_id) do
+  def delete_conversation(scope, conversation_id) when is_binary(conversation_id) do
     conversation = get_conversation!(scope, conversation_id)
-    Repo.delete(conversation)
+    repo().delete(conversation)
   end
 
   #
@@ -115,7 +122,7 @@ defmodule AgenticRuntime.Conversations do
   Verifies the conversation belongs to `scope` before writing. Returns
   `{:error, :not_found}` if the conversation doesn't belong to the caller.
   """
-  def save_agent_state(%Scope{} = scope, conversation_id, state) do
+  def save_agent_state(scope, conversation_id, state) do
     with :ok <- authorize_conversation(scope, conversation_id) do
       attrs = %{
         conversation_id: conversation_id,
@@ -127,12 +134,12 @@ defmodule AgenticRuntime.Conversations do
         nil ->
           %AgentState{}
           |> AgentState.changeset(attrs)
-          |> Repo.insert()
+          |> repo().insert()
 
         existing ->
           existing
           |> AgentState.changeset(attrs)
-          |> Repo.update()
+          |> repo().update()
       end
     end
   end
@@ -143,7 +150,7 @@ defmodule AgenticRuntime.Conversations do
   Returns `{:ok, state_data}` on success or `{:error, :not_found}` if no state
   exists or the conversation doesn't belong to the caller.
   """
-  def load_agent_state(%Scope{} = scope, conversation_id) do
+  def load_agent_state(scope, conversation_id) do
     case get_agent_state(scope, conversation_id) do
       nil -> {:error, :not_found}
       state -> {:ok, state.state_data}
@@ -157,7 +164,7 @@ defmodule AgenticRuntime.Conversations do
   without starting the agent. Returns an empty list if no state exists, no todos
   are present, or the conversation doesn't belong to the caller.
   """
-  def load_todos(%Scope{} = scope, conversation_id) do
+  def load_todos(scope, conversation_id) do
     case load_agent_state(scope, conversation_id) do
       {:ok, %{"state" => %{"todos" => todos}}} when is_list(todos) ->
         todos
@@ -179,14 +186,14 @@ defmodule AgenticRuntime.Conversations do
 
   # Scoped agent-state lookup. Joins to Conversation so we inherit the same
   # tenant filter as `scope_query/2` applies to conversations.
-  defp get_agent_state(%Scope{} = scope, conversation_id) do
+  defp get_agent_state(scope, conversation_id) do
     from(s in AgentState,
       join: c in Conversation,
       on: s.conversation_id == c.id,
       where: s.conversation_id == ^conversation_id
     )
     |> scope_conversation_query(scope)
-    |> Repo.one()
+    |> repo().one()
   end
 
   #
@@ -198,11 +205,11 @@ defmodule AgenticRuntime.Conversations do
 
   Verifies the conversation belongs to `scope` before inserting.
   """
-  def append_display_message(%Scope{} = scope, conversation_id, attrs) do
+  def append_display_message(scope, conversation_id, attrs) do
     with :ok <- authorize_conversation(scope, conversation_id) do
       conversation_id
       |> DisplayMessage.create_changeset(attrs)
-      |> Repo.insert()
+      |> repo().insert()
     end
   end
 
@@ -216,7 +223,7 @@ defmodule AgenticRuntime.Conversations do
     * `:limit` - Maximum number of messages to return (default: all)
     * `:offset` - Number of messages to skip (default: 0)
   """
-  def load_display_messages(%Scope{} = scope, conversation_id, opts \\ []) do
+  def load_display_messages(scope, conversation_id, opts \\ []) do
     case authorize_conversation(scope, conversation_id) do
       :ok ->
         query =
@@ -236,7 +243,7 @@ defmodule AgenticRuntime.Conversations do
             offset -> offset(query, ^offset)
           end
 
-        Repo.all(query)
+        repo().all(query)
 
       {:error, :not_found} ->
         []
@@ -252,7 +259,7 @@ defmodule AgenticRuntime.Conversations do
   @doc """
   Appends a text message to the conversation, filtered by scope.
   """
-  def append_text_message(%Scope{} = scope, conversation_id, message_type, text) do
+  def append_text_message(scope, conversation_id, message_type, text) do
     append_display_message(scope, conversation_id, %{
       message_type: message_type,
       content_type: "text",
@@ -270,14 +277,14 @@ defmodule AgenticRuntime.Conversations do
   Joins to Conversation to enforce tenant isolation — wrong-scope callers
   receive `{:error, :not_found}`.
   """
-  @spec mark_tool_executing(Scope.t(), String.t()) ::
+  @spec mark_tool_executing(term() | nil, String.t()) ::
           {:ok, DisplayMessage.t()} | {:error, :not_found | Ecto.Changeset.t()}
-  def mark_tool_executing(%Scope{} = scope, call_id) do
+  def mark_tool_executing(scope, call_id) do
     call_id
     |> tool_call_query()
     |> where([m], m.status == "pending")
     |> scope_conversation_query(scope)
-    |> Repo.one()
+    |> repo().one()
     |> case do
       nil ->
         {:error, :not_found}
@@ -285,21 +292,21 @@ defmodule AgenticRuntime.Conversations do
       message ->
         message
         |> DisplayMessage.changeset(%{"status" => "executing"})
-        |> Repo.update()
+        |> repo().update()
     end
   end
 
   @doc """
   Updates a tool call message to "completed" status with result metadata, scoped.
   """
-  @spec complete_tool_call(Scope.t(), String.t(), map()) ::
+  @spec complete_tool_call(term() | nil, String.t(), map()) ::
           {:ok, DisplayMessage.t()} | {:error, :not_found | Ecto.Changeset.t()}
-  def complete_tool_call(%Scope{} = scope, call_id, result_metadata \\ %{}) do
+  def complete_tool_call(scope, call_id, result_metadata \\ %{}) do
     call_id
     |> tool_call_query()
     |> where([m], m.status in ["pending", "executing", "interrupted"])
     |> scope_conversation_query(scope)
-    |> Repo.one()
+    |> repo().one()
     |> case do
       nil ->
         {:error, :not_found}
@@ -312,21 +319,21 @@ defmodule AgenticRuntime.Conversations do
           "status" => "completed",
           "metadata" => updated_metadata
         })
-        |> Repo.update()
+        |> repo().update()
     end
   end
 
   @doc """
   Updates a tool call message to "failed" status with error information, scoped.
   """
-  @spec fail_tool_call(Scope.t(), String.t(), map()) ::
+  @spec fail_tool_call(term() | nil, String.t(), map()) ::
           {:ok, DisplayMessage.t()} | {:error, :not_found | Ecto.Changeset.t()}
-  def fail_tool_call(%Scope{} = scope, call_id, error_info \\ %{}) do
+  def fail_tool_call(scope, call_id, error_info \\ %{}) do
     call_id
     |> tool_call_query()
     |> where([m], m.status in ["pending", "executing", "interrupted"])
     |> scope_conversation_query(scope)
-    |> Repo.one()
+    |> repo().one()
     |> case do
       nil ->
         {:error, :not_found}
@@ -339,21 +346,21 @@ defmodule AgenticRuntime.Conversations do
           "status" => "failed",
           "metadata" => updated_metadata
         })
-        |> Repo.update()
+        |> repo().update()
     end
   end
 
   @doc """
   Updates a tool call message to "interrupted" status, scoped.
   """
-  @spec interrupt_tool_call(Scope.t(), String.t(), map()) ::
+  @spec interrupt_tool_call(term() | nil, String.t(), map()) ::
           {:ok, DisplayMessage.t()} | {:error, :not_found | Ecto.Changeset.t()}
-  def interrupt_tool_call(%Scope{} = scope, call_id, interrupt_info \\ %{}) do
+  def interrupt_tool_call(scope, call_id, interrupt_info \\ %{}) do
     call_id
     |> tool_call_query()
     |> where([m], m.status in ["pending", "executing"])
     |> scope_conversation_query(scope)
-    |> Repo.one()
+    |> repo().one()
     |> case do
       nil ->
         {:error, :not_found}
@@ -366,21 +373,21 @@ defmodule AgenticRuntime.Conversations do
           "status" => "interrupted",
           "metadata" => updated_metadata
         })
-        |> Repo.update()
+        |> repo().update()
     end
   end
 
   @doc """
   Updates a tool call message to "cancelled" status, scoped.
   """
-  @spec cancel_tool_call(Scope.t(), String.t()) ::
+  @spec cancel_tool_call(term() | nil, String.t()) ::
           {:ok, DisplayMessage.t()} | {:error, :not_found | Ecto.Changeset.t()}
-  def cancel_tool_call(%Scope{} = scope, call_id) do
+  def cancel_tool_call(scope, call_id) do
     call_id
     |> tool_call_query()
     |> where([m], m.status in ["pending", "executing", "interrupted"])
     |> scope_conversation_query(scope)
-    |> Repo.one()
+    |> repo().one()
     |> case do
       nil ->
         {:error, :not_found}
@@ -388,7 +395,7 @@ defmodule AgenticRuntime.Conversations do
       message ->
         message
         |> DisplayMessage.changeset(%{"status" => "cancelled"})
-        |> Repo.update()
+        |> repo().update()
     end
   end
 
@@ -400,15 +407,15 @@ defmodule AgenticRuntime.Conversations do
   subsequent status transitions since those operations merge metadata. Also stamps
   the matching tool_result message when one exists.
   """
-  @spec record_hitl_decision(Scope.t(), String.t(), String.t()) ::
+  @spec record_hitl_decision(term() | nil, String.t(), String.t()) ::
           {:ok, DisplayMessage.t()} | {:error, :not_found | Ecto.Changeset.t()}
-  def record_hitl_decision(%Scope{} = scope, call_id, decision)
+  def record_hitl_decision(scope, call_id, decision)
       when decision in ["approved", "rejected"] do
     result =
       call_id
       |> tool_call_query()
       |> scope_conversation_query(scope)
-      |> Repo.one()
+      |> repo().one()
       |> case do
         nil ->
           {:error, :not_found}
@@ -418,13 +425,13 @@ defmodule AgenticRuntime.Conversations do
 
           message
           |> DisplayMessage.changeset(%{"metadata" => updated_metadata})
-          |> Repo.update()
+          |> repo().update()
       end
 
     call_id
     |> tool_result_query()
     |> scope_conversation_query(scope)
-    |> Repo.one()
+    |> repo().one()
     |> case do
       nil ->
         :ok
@@ -434,7 +441,7 @@ defmodule AgenticRuntime.Conversations do
 
         tr_msg
         |> DisplayMessage.changeset(%{"content" => updated_content})
-        |> Repo.update()
+        |> repo().update()
     end
 
     result
@@ -443,14 +450,14 @@ defmodule AgenticRuntime.Conversations do
   @doc """
   Resolves an interrupted tool result display message after a sub-agent resumes, scoped.
   """
-  @spec resolve_interrupted_tool_result(Scope.t(), String.t(), String.t()) ::
+  @spec resolve_interrupted_tool_result(term() | nil, String.t(), String.t()) ::
           {:ok, DisplayMessage.t()} | {:error, :not_found | Ecto.Changeset.t()}
-  def resolve_interrupted_tool_result(%Scope{} = scope, tool_call_id, result_content) do
+  def resolve_interrupted_tool_result(scope, tool_call_id, result_content) do
     tool_call_id
     |> tool_result_query()
-    |> where([m], fragment("(?->>'is_interrupt')::boolean = true", m.content))
+    |> where([m, _c], fragment("(?->>'is_interrupt')::boolean = true", m.content))
     |> scope_conversation_query(scope)
-    |> Repo.one()
+    |> repo().one()
     |> case do
       nil ->
         {:error, :not_found}
@@ -463,15 +470,15 @@ defmodule AgenticRuntime.Conversations do
 
         message
         |> DisplayMessage.changeset(%{"content" => updated_content})
-        |> Repo.update()
+        |> repo().update()
     end
   end
 
   @doc """
   Searches message content across all types, within the scope's conversations.
   """
-  def search_messages(%Scope{} = scope, search_term) do
-    owner_id = get_owner_id(scope)
+  def search_messages(scope, search_term) do
+    owner_id = Scope.owner_id(scope)
 
     from(m in DisplayMessage,
       join: c in Conversation,
@@ -479,35 +486,23 @@ defmodule AgenticRuntime.Conversations do
       where: c.user_id == ^owner_id,
       where: fragment("?::text ILIKE ?", m.content, ^"%#{search_term}%")
     )
-    |> Repo.all()
+    |> repo().all()
   end
 
   #
   # Private Helpers
   #
 
-  # Scope the primary Conversation table.
-  #
-  # CUSTOMIZE based on YOUR scope struct fields:
-  #
-  # Single-user scope:
-  #   defp scope_query(query, %Scope{user_id: user_id}) do
-  #     from q in query, where: q.user_id == ^user_id
-  #   end
-  #
-  # Multi-tenant (organization):
-  #   defp scope_query(query, %Scope{organization_id: org_id}) do
-  #     from q in query, where: q.organization_id == ^org_id
-  #   end
-  defp scope_query(query, %Scope{} = scope) do
-    owner_id = get_owner_id(scope)
+  # Scope the primary Conversation table by owner id from the host's scope.
+  defp scope_query(query, scope) do
+    owner_id = Scope.owner_id(scope)
     from(q in query, where: q.user_id == ^owner_id)
   end
 
   # Scope a query that has already joined to Conversation. Applies the tenant
   # filter to the joined `c` binding instead of the primary binding.
-  defp scope_conversation_query(query, %Scope{} = scope) do
-    owner_id = get_owner_id(scope)
+  defp scope_conversation_query(query, scope) do
+    owner_id = Scope.owner_id(scope)
     from([_m, c] in query, where: c.user_id == ^owner_id)
   end
 
@@ -538,20 +533,16 @@ defmodule AgenticRuntime.Conversations do
   # Authorization check: does this conversation belong to the given scope?
   # Emits `SELECT 1 ... LIMIT 1` instead of hydrating the row, since the
   # caller only needs a yes/no answer before proceeding with a write.
-  defp authorize_conversation(%Scope{} = scope, conversation_id) do
+  defp authorize_conversation(scope, conversation_id) do
     Conversation
     |> scope_query(scope)
     |> where([c], c.id == ^conversation_id)
-    |> Repo.exists?()
+    |> repo().exists?()
     |> case do
       true -> :ok
       false -> {:error, :not_found}
     end
   end
 
-  # Extracts the owner ID from the scope struct.
-  #
-  # This default assumes your Scope has a `user` field containing
-  # a struct with an `id` field. Customize if your Scope has a different structure.
-  defp get_owner_id(%Scope{user: user}), do: user.id
+  defp repo, do: Application.get_env(:agentic_runtime, :repo)
 end

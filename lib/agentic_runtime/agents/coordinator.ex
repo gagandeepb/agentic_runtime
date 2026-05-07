@@ -9,12 +9,17 @@ defmodule AgenticRuntime.Agents.Coordinator do
   ## Usage
 
       # Start or resume a conversation agent. Pass the tenant scope and
-      # filesystem scope from the caller's session (e.g. a LiveView socket).
+      # filesystem scope from the caller's session.
       filesystem_scope = {:user, current_scope.user.id}
       {:ok, session} = AgenticRuntime.Agents.Coordinator.start_conversation_session(
         conversation_id,
         scope: current_scope,
-        filesystem_scope: filesystem_scope
+        filesystem_scope: filesystem_scope,
+        factory_opts: [
+          model_config: model_config,
+          base_system_prompt: prompt,
+          tools: tools
+        ]
       )
 
       # Subscribe to agent events
@@ -26,95 +31,19 @@ defmodule AgenticRuntime.Agents.Coordinator do
       # Stop agent (optional - agents auto-timeout)
       AgenticRuntime.Agents.Coordinator.stop_conversation_session(conversation_id)
 
-  ## LiveView Integration
-
-  The agents_demo application demonstrates the correct integration pattern.
-  See `agents_demo/lib/agents_demo_web/live/chat_live.ex` for a complete example.
-
-  For streamlined LiveView integration with reusable state management and event handlers,
-  use the AgentLiveHelpers module (generated via `mix sagents.gen.live_helpers`).
-
-  ### Basic Integration Pattern
-
-  **1. In mount/3 - Subscribe to agent events:**
-
-      def mount(%{"conversation_id" => conversation_id}, _session, socket) do
-        if connected?(socket) do
-          # Subscribe to agent events for real-time updates
-          AgenticRuntime.Agents.Coordinator.ensure_subscribed_to_conversation(conversation_id)
-        end
-
-        {:ok, assign(socket, conversation_id: conversation_id)}
-      end
-
-  **2. When sending messages - Start agent session:**
-
-      def handle_event("send_message", %{"message" => message_text}, socket) do
-        conversation_id = socket.assigns.conversation_id
-        current_scope = socket.assigns.current_scope
-        filesystem_scope = {:user, current_scope.user.id}
-
-        # Start agent session. Pass `:scope` so sagents can thread it through
-        # persistence callbacks (arg #1) and tool `context.scope`. Pass
-        # `:filesystem_scope` so FileSystem middleware operates on the right
-        # bucket. The two are independent — same owner, different purposes.
-        session_opts = [
-          scope: current_scope,
-          filesystem_scope: filesystem_scope
-        ]
-
-        case AgenticRuntime.Agents.Coordinator.start_conversation_session(conversation_id, session_opts) do
-          {:ok, session} ->
-            # Create and add message to agent
-            message = Message.new_user!(message_text)
-            AgentServer.add_message(session.agent_id, message)
-            {:noreply, assign(socket, :loading, true)}
-
-          {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Failed to start agent")}
-        end
-      end
-
-  **3. Handle agent events:**
-
-      @impl true
-      def handle_info({:agent, {:status_changed, :running, nil}}, socket) do
-        {:noreply, assign(socket, :loading, true)}
-      end
-
-      @impl true
-      def handle_info({:agent, {:status_changed, :idle, _data}}, socket) do
-        {:noreply, assign(socket, :loading, false)}
-      end
-
-      @impl true
-      def handle_info({:agent, {:llm_deltas, deltas}}, socket) do
-        # Handle streaming content deltas
-        {:noreply, socket}
-      end
-
-  **Note:** For more sophisticated LiveView integration with reusable state management
-  and event handlers, generate the AgentLiveHelpers module using
-  `mix sagents.gen.live_helpers`.
-
   ## Configuration
 
-  Customize this module for your application:
-  - Change agent_id mapping strategy in `conversation_agent_id/1`
-  - Modify inactivity timeout in `start_conversation_session/2`
-  - Add custom lifecycle hooks (telemetry, logging, permissions)
+  Two host-app modules are resolved at runtime via `Application.get_env`:
 
+      config :agentic_runtime,
+        pubsub_name: MyApp.PubSub,
+        presence_module: MyAppWeb.Presence
   """
 
   alias Sagents.{State, AgentServer, AgentSupervisor, AgentsDynamicSupervisor}
   require Logger
 
-  # PubSub configuration - single source of truth
   @pubsub_module Phoenix.PubSub
-  @pubsub_name AgenticRuntime.PubSub
-
-  # Presence configuration for tracking conversation viewers
-  @presence_module AgenticRuntimeWeb.Presence
 
   # Default inactivity timeout (can be overridden per session)
   @inactivity_timeout_minutes 10
@@ -122,73 +51,26 @@ defmodule AgenticRuntime.Agents.Coordinator do
   @doc """
   Starts or resumes an agent session for a conversation.
 
-  This function is idempotent - safe to call multiple times.
-  If the agent is already running, returns the existing session.
+  This function is idempotent — safe to call multiple times. If the agent is
+  already running, returns the existing session.
 
   ## Options
 
-  - `:filesystem_scope` - Required. Filesystem scope tuple (e.g., `{:user, user_id}`)
-  - `:scope` - The Phoenix scope (e.g., `current_scope`). In production this should
-    come from the caller's session (e.g., a LiveView's `socket.assigns.current_scope`).
-    `nil` is allowed for tests, admin scripts, or background jobs, but tenant-scoped
-    queries downstream will have no owner to filter by. Set on the agent's `:scope`
-    field via the Factory; sagents propagates it as the first positional argument to
-    persistence callbacks and as `context.scope` to tool functions.
-    **Sizing note:** the scope struct is copied across process boundaries on every
-    hop (LiveView → AgentServer → tool invocations). If your Phoenix Scope preloads
-    heavy Ecto associations, consider passing a slim version instead. See
-    `sagents/docs/tool_context_and_state.md` ("Keep scope lean") for the pattern.
-  - `:inactivity_timeout` - Milliseconds before agent stops (default: 10 minutes)
-  - `:tool_context` - Map of caller-supplied data. Its entries become keys on
-    the `context` map passed as the tool function's second argument. For example,
-    `%{feature_flags: flags}` here lets tools read `context.feature_flags`.
-    Defaults to `%{}`.
-  - `:factory_opts` - Additional options passed to your Factory module (e.g., `:timezone` for custom middleware)
+  - `:filesystem_scope` (required) — Filesystem scope tuple, e.g. `{:user, user_id}`.
+  - `:scope` — Integrator-defined scope struct (see `AgenticRuntime.Scope`).
+    In production this should come from the caller's session. `nil` is allowed
+    for tests, admin scripts, or background jobs without a tenant context.
+  - `:inactivity_timeout` — Milliseconds before the agent stops (default: 10 min).
+  - `:tool_context` — Map of caller-supplied data passed to tool functions.
+  - `:factory_opts` — Options passed through to `AgenticRuntime.Agents.Factory.create_agent/1`
+    (e.g. `:model_config`, `:base_system_prompt`, `:tools`, `:fallback_models`).
 
   ## Returns
 
-  - `{:ok, session}` - Session info (whether just started or already running)
-  - `{:error, reason}` - Failed to start
-
-  ## Examples
-
-      # Standard usage - pass tenant scope and filesystem scope from the caller.
-      filesystem_scope = {:user, current_scope.user.id}
-      {:ok, session} = AgenticRuntime.Agents.Coordinator.start_conversation_session(
-        conversation_id,
-        scope: current_scope,
-        filesystem_scope: filesystem_scope
-      )
-
-      # Custom inactivity timeout (30 minutes)
-      {:ok, session} = AgenticRuntime.Agents.Coordinator.start_conversation_session(
-        conversation_id,
-        scope: current_scope,
-        filesystem_scope: {:user, user_id},
-        inactivity_timeout: :timer.minutes(30)
-      )
-
-      # With custom factory options (e.g., for timezone-aware middleware)
-      {:ok, session} = AgenticRuntime.Agents.Coordinator.start_conversation_session(
-        conversation_id,
-        scope: current_scope,
-        filesystem_scope: filesystem_scope,
-        factory_opts: [timezone: "America/New_York"]
-      )
-
-      # With extra caller context for tool functions (scope is separate — don't
-      # stuff it into :tool_context). `:tool_context` is a grab-bag for
-      # non-scope data your own tools need.
-      {:ok, session} = AgenticRuntime.Agents.Coordinator.start_conversation_session(
-        conversation_id,
-        scope: current_scope,
-        filesystem_scope: filesystem_scope,
-        tool_context: %{feature_flags: flags, request_id: req_id}
-      )
-
+  - `{:ok, session}` — `%{agent_id, pid, conversation_id}` whether just started or already running
+  - `{:error, reason}` — Failed to start
   """
   def start_conversation_session(conversation_id, opts \\ []) do
-    # Validate required filesystem scope
     filesystem_scope =
       case Keyword.fetch(opts, :filesystem_scope) do
         {:ok, scope_value} ->
@@ -244,36 +126,13 @@ defmodule AgenticRuntime.Agents.Coordinator do
     end
   end
 
-  @doc """
-  Checks if an agent session is currently running.
-  """
+  @doc "Checks if an agent session is currently running."
   def session_running?(conversation_id) do
     agent_id = conversation_agent_id(conversation_id)
     AgentServer.get_pid(agent_id) != nil
   end
 
-  @doc """
-  Maps a conversation ID to an agent ID.
-
-  ## Customization
-
-  Change this function to implement different mapping strategies:
-
-      # User-centric agents (one agent per user)
-      def conversation_agent_id(conversation_id) do
-        user_id = Conversations.get_user_id(conversation_id)
-        "user-\#{user_id}"
-      end
-
-      # Conversation-centric with prefix (current)
-      def conversation_agent_id(conversation_id) do
-        "conversation-\#{conversation_id}"
-      end
-
-      # Simple pass-through
-      def conversation_agent_id(conversation_id), do: conversation_id
-
-  """
+  @doc "Maps a conversation ID to an agent ID."
   def conversation_agent_id(conversation_id) do
     "conversation-#{conversation_id}"
   end
@@ -281,183 +140,88 @@ defmodule AgenticRuntime.Agents.Coordinator do
   @doc """
   Ensure the current process is subscribed to agent events for a conversation.
 
-  This function is idempotent - safe to call multiple times. It delegates to
-  Sagents.PubSub.subscribe/3 for subscription management.
-
-  This works even when the agent isn't running because PubSub topics exist
-  independently of processes. When the agent later starts and publishes events,
-  subscribers will receive them.
-
-  Returns `:ok` on success.
-
-  ## Examples
-
-      # In a LiveView - safe to call multiple times
-      Coordinator.ensure_subscribed_to_conversation(conversation_id)
-
-      # Even if user clicks same conversation repeatedly, only subscribes once
-      Coordinator.ensure_subscribed_to_conversation(conversation_id)
-      Coordinator.ensure_subscribed_to_conversation(conversation_id)  # No-op
-
-      # Same process can subscribe to multiple conversations
-      Coordinator.ensure_subscribed_to_conversation(conversation_id_1)
-      Coordinator.ensure_subscribed_to_conversation(conversation_id_2)
+  Idempotent — safe to call multiple times.
   """
   def ensure_subscribed_to_conversation(conversation_id) do
     agent_id = conversation_agent_id(conversation_id)
     topic = agent_topic(agent_id)
-    Sagents.PubSub.subscribe(@pubsub_module, @pubsub_name, topic)
+    Sagents.PubSub.subscribe(@pubsub_module, pubsub_name(), topic)
   end
 
   @doc """
-  Subscribe to agent events for a conversation without requiring the agent to be running.
+  Subscribe to agent events for a conversation without dedup.
 
-  Note: Consider using `ensure_subscribed_to_conversation/1` instead, which prevents
-  duplicate subscriptions if called multiple times. This function uses raw_subscribe
-  which does not prevent duplicates.
-
-  This works because PubSub topics exist independently of processes. When the agent
-  later starts and publishes events, subscribers will receive them.
-
-  Returns `:ok` on success.
+  Prefer `ensure_subscribed_to_conversation/1` unless you specifically need
+  raw subscription.
   """
   def subscribe_to_conversation(conversation_id) do
     agent_id = conversation_agent_id(conversation_id)
     topic = agent_topic(agent_id)
-    Sagents.PubSub.raw_subscribe(@pubsub_module, @pubsub_name, topic)
+    Sagents.PubSub.raw_subscribe(@pubsub_module, pubsub_name(), topic)
   end
 
-  @doc """
-  Unsubscribe from agent events for a conversation.
-
-  Clears the subscription tracking in the Process dictionary.
-  """
+  @doc "Unsubscribe from agent events for a conversation."
   def unsubscribe_from_conversation(conversation_id) do
     agent_id = conversation_agent_id(conversation_id)
     topic = agent_topic(agent_id)
-    Sagents.PubSub.unsubscribe(@pubsub_module, @pubsub_name, topic)
+    Sagents.PubSub.unsubscribe(@pubsub_module, pubsub_name(), topic)
   end
 
   @doc """
-  Track a viewer's presence in a conversation.
-
-  Call this in your LiveView mount after the socket is connected to enable smart
-  agent shutdown - when no viewers are present and the agent becomes idle, it can
-  shutdown immediately to free resources.
-
-  Phoenix.Presence automatically removes the entry when the tracked process terminates,
-  so manual cleanup is not needed.
-
-  ## Parameters
-
-    - `conversation_id` - The conversation being viewed
-    - `viewer_id` - Unique identifier for the viewer (typically user_id)
-    - `metadata` - Optional metadata map (default: empty map)
-
-  ## Returns
-
-    - `{:ok, ref}` - Presence tracked successfully
-    - `{:error, reason}` - Failed to track presence
-
-  ## Examples
-
-      # In a LiveView after socket is connected
-      if connected?(socket) do
-        {:ok, _ref} = Coordinator.track_conversation_viewer(conversation_id, user.id)
-      end
-
-      # With metadata
-      Coordinator.track_conversation_viewer(
-        conversation_id,
-        user.id,
-        %{username: user.name}
-      )
+  Track a viewer's presence in a conversation. Phoenix.Presence cleans up
+  automatically when the tracked process terminates.
   """
   def track_conversation_viewer(conversation_id, viewer_id, metadata \\ %{}) do
     topic = presence_topic(conversation_id)
     full_metadata = Map.merge(%{joined_at: System.system_time(:second)}, metadata)
-    Sagents.Presence.track(@presence_module, topic, viewer_id, full_metadata)
+    Sagents.Presence.track(presence_module(), topic, viewer_id, full_metadata)
   end
 
-  @doc """
-  Untrack a viewer's presence from a conversation.
-
-  Call this when switching between conversations to properly clean up presence tracking.
-
-  ## Parameters
-
-    - `conversation_id` - The conversation to untrack from
-    - `viewer_id` - Unique identifier for the viewer (typically user_id)
-
-  ## Returns
-
-    - `:ok` - Presence untracked successfully
-
-  ## Examples
-
-      # When switching conversations
-      AgenticRuntime.Agents.Coordinator.untrack_conversation_viewer(old_conversation_id, user.id)
-  """
+  @doc "Untrack a viewer's presence from a conversation."
   def untrack_conversation_viewer(conversation_id, viewer_id) do
     topic = presence_topic(conversation_id)
-    Sagents.Presence.untrack(@presence_module, topic, viewer_id)
+    Sagents.Presence.untrack(presence_module(), topic, viewer_id)
   end
 
-  @doc """
-  List all viewers currently present in a conversation.
-
-  Returns a map of viewer_id => metadata for all tracked viewers.
-  """
+  @doc "List all viewers currently present in a conversation."
   def list_conversation_viewers(conversation_id) do
     topic = presence_topic(conversation_id)
-    Sagents.Presence.list(@presence_module, topic)
+    Sagents.Presence.list(presence_module(), topic)
   end
 
-  @doc """
-  Get the PubSub topic for a conversation's agent.
-
-  Useful for direct PubSub operations if needed.
-  """
+  @doc "Get the PubSub topic for a conversation's agent."
   def conversation_topic(conversation_id) do
     agent_id = conversation_agent_id(conversation_id)
     agent_topic(agent_id)
   end
 
-  @doc """
-  Get the PubSub name used by this coordinator.
-
-  Returns the atom name of the PubSub server.
-  """
+  @doc "Get the PubSub server name from application config."
   def pubsub_name do
-    @pubsub_name
+    Application.get_env(:agentic_runtime, :pubsub_name)
+  end
+
+  @doc "Get the Presence module from application config."
+  def presence_module do
+    Application.get_env(:agentic_runtime, :presence_module)
   end
 
   # Private Functions
 
-  # Private helper for agent PubSub topic naming
-  defp agent_topic(agent_id) do
-    "agent_server:#{agent_id}"
-  end
+  defp agent_topic(agent_id), do: "agent_server:#{agent_id}"
 
-  # Private helper for presence topic naming
-  defp presence_topic(conversation_id) do
-    "conversation:#{conversation_id}"
-  end
+  defp presence_topic(conversation_id), do: "conversation:#{conversation_id}"
 
   defp do_start_session(conversation_id, agent_id, filesystem_scope, opts) do
     Logger.info(
       "Starting agent session for conversation #{conversation_id} with filesystem_scope #{inspect(filesystem_scope)}"
     )
 
-    # 1. Extract options
     factory_opts = Keyword.get(opts, :factory_opts, [])
     scope = Keyword.get(opts, :scope)
     tool_context = Keyword.get(opts, :tool_context, %{})
 
-    # 2. Create agent from factory (configuration from code).
-    # Scope is passed as a dedicated :scope option. Sagents auto-merges it into
-    # custom_context under the canonical :scope key and threads it through
-    # persistence callbacks as the first positional argument.
+    # Sagents 0.7+ propagates :scope to persistence callbacks (arg #1) and to
+    # tool `context.scope`. No need to stuff it into tool_context manually.
     merged_factory_opts =
       factory_opts
       |> Keyword.put(:agent_id, agent_id)
@@ -467,20 +231,17 @@ defmodule AgenticRuntime.Agents.Coordinator do
 
     {:ok, agent} = AgenticRuntime.Agents.Factory.create_agent(merged_factory_opts)
 
-    # 3. Load or create state (data from database, scoped to the caller)
+    # Load or create state, scoped to the caller
     {:ok, state} = create_conversation_state(conversation_id, scope)
 
-    # 4. Extract configuration from options
     inactivity_timeout =
       Keyword.get(opts, :inactivity_timeout, :timer.minutes(@inactivity_timeout_minutes))
 
-    # 5. Start the AgentSupervisor with proper configuration
     supervisor_name = AgentSupervisor.get_name(agent_id)
 
-    # Configure presence tracking for smart shutdown
     presence_tracking = [
       enabled: true,
-      presence_module: @presence_module,
+      presence_module: presence_module(),
       topic: presence_topic(conversation_id)
     ]
 
@@ -489,38 +250,24 @@ defmodule AgenticRuntime.Agents.Coordinator do
       name: supervisor_name,
       agent: agent,
       initial_state: state,
-      pubsub: {@pubsub_module, @pubsub_name},
-      debug_pubsub: {@pubsub_module, @pubsub_name},
+      pubsub: {@pubsub_module, pubsub_name()},
+      debug_pubsub: {@pubsub_module, pubsub_name()},
       inactivity_timeout: inactivity_timeout,
       presence_tracking: presence_tracking,
-      presence_module: @presence_module,
+      presence_module: presence_module(),
       conversation_id: conversation_id,
       agent_persistence: AgenticRuntime.Agents.AgentPersistence,
       display_message_persistence: AgenticRuntime.Agents.DisplayMessagePersistence
-      # message_preprocessor: MyApp.MyMessagePreprocessor
     ]
 
     case AgentsDynamicSupervisor.start_agent_sync(supervisor_config) do
       {:ok, _supervisor_pid} ->
         pid = AgentServer.get_pid(agent_id)
-
-        {:ok,
-         %{
-           agent_id: agent_id,
-           pid: pid,
-           conversation_id: conversation_id
-         }}
+        {:ok, %{agent_id: agent_id, pid: pid, conversation_id: conversation_id}}
 
       {:ok, _supervisor_pid, :already_started} ->
-        # Idempotent - agent already running under supervision
         pid = AgentServer.get_pid(agent_id)
-
-        {:ok,
-         %{
-           agent_id: agent_id,
-           pid: pid,
-           conversation_id: conversation_id
-         }}
+        {:ok, %{agent_id: agent_id, pid: pid, conversation_id: conversation_id}}
 
       {:error, reason} ->
         Logger.error("Failed to start agent session: #{inspect(reason)}")
