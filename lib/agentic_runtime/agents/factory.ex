@@ -63,11 +63,31 @@ defmodule AgenticRuntime.Agents.Factory do
   """
 
   alias LangChain.ChatModels.ChatAnthropic
-  alias LangChain.ChatModels.ChatGoogleAI
-  alias LangChain.ChatModels.ChatOpenAI
+  # Uncomment for OpenAI:
+  # alias LangChain.ChatModels.ChatOpenAI
+  # Uncomment for Bedrock:
+  # alias LangChain.Utils.BedrockConfig
   alias Sagents.Agent
   alias Sagents.Middleware.ConversationTitle
   alias Sagents.Middleware.HumanInTheLoop
+
+  # ---------------------------------------------------------------------------
+  # Model Configuration (edit these module attributes to change models)
+  # ---------------------------------------------------------------------------
+
+  # Primary model for agent conversations
+  # See: https://docs.anthropic.com/en/docs/models-overview
+  @main_model "claude-sonnet-4-6"
+
+  # Title generation uses a lighter/faster model for cost efficiency
+  # Haiku is ~10x cheaper than Sonnet and sufficient for generating titles
+  @title_model "claude-haiku-4-5"
+  # Uncomment when using Bedrock fallback:
+  # @title_fallback_model "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+
+  # For OpenAI, uncomment and use:
+  # @main_model "gpt-4o"
+  # @title_model "gpt-4o-mini"
 
   @doc """
   Creates an agent with the standard configuration.
@@ -75,12 +95,19 @@ defmodule AgenticRuntime.Agents.Factory do
   ## Options
 
   - `:agent_id` - Required. Unique identifier for this agent.
-  - `:filesystem_scope` - Optional. Scope tuple for filesystem isolation.
+  - `:filesystem_scope` - Required. Scope tuple for filesystem isolation.
     Examples: `{:user, user_id}`, `{:project, 456}`, `{:team, 789}`.
-    Pass `nil` for agent-scoped (isolated per conversation). This is the 
-    default behaviour.
+    Pass `nil` for agent-scoped (isolated per conversation).
+  - `:scope` - Integrator-defined scope struct (e.g., `%MyApp.Accounts.Scope{}`).
+    In production this should be passed by the Coordinator from the caller's session.
+    `nil` is allowed (for tests, admin scripts, or background jobs without a user
+    context) but tenant-scoped queries downstream will have no owner to filter by.
+    Set on `agent.scope`; sagents propagates to persistence callbacks (arg #1) and
+    to tool `context.scope`.
   - `:interrupt_on` - Optional. Map of tool names requiring approval.
     Pass `nil` to disable HITL entirely.
+  - `:tool_context` - Optional. Map of caller-supplied data passed to tool functions
+    via `LLMChain.custom_context`. Defaults to `%{}`. Example: `%{user_id: 42}`.
 
   ## Examples
 
@@ -116,24 +143,23 @@ defmodule AgenticRuntime.Agents.Factory do
   """
   def create_agent(opts \\ []) do
     agent_id = Keyword.fetch!(opts, :agent_id)
-    filesystem_scope = Keyword.get(opts, :filesystem_scope, nil)
+    filesystem_scope = Keyword.fetch!(opts, :filesystem_scope)
+    scope = Keyword.get(opts, :scope)
     interrupt_on = Keyword.get(opts, :interrupt_on, default_interrupt_on())
-    main_model_config = Keyword.fetch!(opts, :model_config)
-    title_model_config = Keyword.get(opts, :title_model_config, main_model_config)
-    base_system_prompt = Keyword.fetch!(opts, :base_system_prompt)
-    tools = Keyword.get(opts, :tools, [])
-    fallback_models = Keyword.get(opts, :fallback_models, [])
-    before_fallback = Keyword.get(opts, :before_fallback, nil)
+    tool_context = Keyword.get(opts, :tool_context, %{})
 
     Agent.new(
       %{
         agent_id: agent_id,
-        model: main_model_config,
-        base_system_prompt: base_system_prompt,
-        middleware: build_middleware(filesystem_scope, interrupt_on, title_model_config),
-        fallback_models: fallback_models,
-        before_fallback: before_fallback,
-        tools: tools
+        model: get_model_config(),
+        base_system_prompt: base_system_prompt(),
+        middleware: build_middleware(filesystem_scope, interrupt_on),
+        fallback_models: get_fallback_models(),
+        before_fallback: get_before_fallback(),
+        # Add any custom tools here (tools not provided by middleware)
+        tools: [],
+        tool_context: tool_context,
+        scope: scope
       },
       # Since we specify the full middleware stack, don't add defaults
       replace_default_middleware: true
@@ -143,31 +169,167 @@ defmodule AgenticRuntime.Agents.Factory do
   # ---------------------------------------------------------------------------
   # Model Configuration
   # ---------------------------------------------------------------------------
-  def build_anthropic_model_config(model_name, api_key, opts \\ []) do
-    thinking_opts = Keyword.get(opts, :thinking, %{type: "enabled"})
 
+  # Primary model configuration.
+  # Modify this function to switch providers or models.
+  defp get_model_config do
     ChatAnthropic.new!(%{
-      model: model_name,
-      api_key: api_key,
+      model: @main_model,
+      api_key: System.fetch_env!("ANTHROPIC_API_KEY"),
       stream: true,
-      thinking: thinking_opts
+      cache_control: %{"type" => "ephemeral"},
+      thinking: %{
+        type: "enabled",
+        budget_tokens: 3_000
+      }
+    })
+
+    # OpenAI alternative:
+    # ChatOpenAI.new!(%{
+    #   model: @main_model,
+    #   api_key: System.fetch_env!("OPENAI_API_KEY"),
+    #   stream: true
+    # })
+  end
+
+  # Fallback models - same model on different infrastructure for resilience.
+  # These are used when the primary provider is unavailable.
+  #
+  # This function is called by create_agent/1 and passed to the Agent struct.
+  #
+  # Note: To use Bedrock fallback, configure AWS credentials in config.exs:
+  #
+  #   config :langchain, :bedrock,
+  #     aws_access_key_id: System.get_env("AWS_ACCESS_KEY_ID"),
+  #     aws_secret_access_key: System.get_env("AWS_SECRET_ACCESS_KEY"),
+  #     aws_region: System.get_env("AWS_REGION", "us-east-1")
+  #
+  # Then uncomment the BedrockConfig alias at the top of this file.
+  #
+  @doc """
+  Returns the list of fallback models to use when the primary model fails.
+
+  This is called automatically by `create_agent/1`. The fallback models are
+  used in order when the primary model encounters an error that should be
+  retried (rate limits, service unavailable, etc.).
+
+  **Cost Considerations:**
+  - Fallbacks are only used when the primary model fails
+  - Each fallback attempt incurs API costs
+  - Monitor your primary model's error rate to assess fallback usage
+  - Consider using cheaper models as fallbacks (e.g., Haiku instead of Sonnet)
+
+  See the implementation for examples of configuring Bedrock and Azure fallbacks.
+  """
+  def get_fallback_models do
+    [
+      # Anthropic via AWS Bedrock (same Claude model, different provider)
+      # Uncomment when Bedrock is configured:
+      # ChatAnthropic.new!(%{
+      #   model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      #   bedrock: BedrockConfig.from_application_env!(),
+      #   stream: true
+      # })
+
+      # OpenAI via Azure alternative:
+      # ChatOpenAI.new!(%{
+      #   model: @main_model,
+      #   endpoint: "https://your-resource.openai.azure.com",
+      #   api_key: System.fetch_env!("AZURE_OPENAI_API_KEY"),
+      #   api_version: "2024-02-15-preview"
+      # })
+    ]
+  end
+
+  @doc """
+  Returns an optional function to modify the chain before each LLM attempt.
+
+  This function is called before EVERY attempt, including the first. This makes
+  it useful for provider-specific modifications like:
+  - Swapping system prompts for different providers (Anthropic vs OpenAI formatting)
+  - Adjusting context or parameters based on the model
+  - Logging or telemetry per attempt
+
+  ## Function Signature
+
+  The function receives an `LLMChain.t()` and returns a modified `LLMChain.t()`:
+
+      fn %LLMChain{} = chain -> modified_chain end
+
+  ## Example: Provider-Specific System Prompts
+
+      def get_before_fallback do
+        fn chain ->
+          case chain.llm do
+            %ChatAnthropic{} ->
+              # Anthropic-specific system prompt
+              new_prompt = Message.new_system!("Anthropic-optimized prompt")
+              %LLMChain{chain | messages:
+                LangChain.Utils.replace_system_message!(chain.messages, new_prompt)}
+
+            %ChatOpenAI{} ->
+              # OpenAI-specific system prompt
+              new_prompt = Message.new_system!("OpenAI-optimized prompt")
+              %LLMChain{chain | messages:
+                LangChain.Utils.replace_system_message!(chain.messages, new_prompt)}
+
+            _ ->
+              chain
+          end
+        end
+      end
+
+  Returns a function `(LLMChain.t() -> LLMChain.t())` or `nil` to skip.
+  """
+  def get_before_fallback do
+    nil
+
+    # Example implementation (commented out):
+    # fn chain ->
+    #   # Example: Log which model is being attempted
+    #   Logger.debug("Attempting LLM call with \#{inspect(chain.llm)}")
+    #   chain
+    # end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Title Generation Model
+  # ---------------------------------------------------------------------------
+
+  # Title generation uses a lighter/faster model for cost efficiency.
+  # Haiku is ~10x cheaper than Sonnet and sufficient for generating titles.
+  defp get_title_model do
+    ChatAnthropic.new!(%{
+      model: @title_model,
+      api_key: System.fetch_env!("ANTHROPIC_API_KEY"),
+      temperature: 1,
+      stream: false
     })
   end
 
-  def build_openai_model_config(model_name, api_key) do
-    ChatOpenAI.new!(%{
-      model: model_name,
-      api_key: api_key,
-      stream: true
-    })
+  # Fallback models for title generation
+  defp get_title_fallbacks do
+    [
+      # Uncomment when Bedrock is configured (also uncomment BedrockConfig alias):
+      # ChatAnthropic.new!(%{
+      #   model: @title_fallback_model,
+      #   bedrock: BedrockConfig.from_application_env!(),
+      #   temperature: 1,
+      #   stream: false
+      # })
+    ]
   end
 
-  def build_googleai_model_config(model_name, api_key) do
-    ChatGoogleAI.new!(%{
-      model: model_name,
-      api_key: api_key,
-      stream: true
-    })
+  # ---------------------------------------------------------------------------
+  # System Prompt
+  # ---------------------------------------------------------------------------
+
+  # Base system prompt for all agents.
+  # Customize this for your agent's purpose and personality.
+  defp base_system_prompt do
+    """
+    You are a helpful AI assistant.
+    """
   end
 
   # ---------------------------------------------------------------------------
@@ -183,7 +345,11 @@ defmodule AgenticRuntime.Agents.Factory do
   #   - `%{allowed_decisions: [:approve, :reject]}` - Custom decisions
   #
   defp default_interrupt_on do
-    nil
+    %{
+      "delete_file" => true
+      # "write_file" => true,
+      # "execute_command" => true
+    }
   end
 
   # ---------------------------------------------------------------------------
@@ -205,7 +371,7 @@ defmodule AgenticRuntime.Agents.Factory do
   # Order matters! Early middleware sees messages first (before_model) and
   # processes responses last (after_model).
   #
-  defp build_middleware(filesystem_scope, interrupt_on, title_model_config) do
+  defp build_middleware(filesystem_scope, interrupt_on) do
     [
       # Task management - gives the agent a todo list for tracking work
       Sagents.Middleware.TodoList,
@@ -215,8 +381,8 @@ defmodule AgenticRuntime.Agents.Factory do
       # Uses a lighter/faster model (Haiku) for cost efficiency.
       {ConversationTitle,
        [
-         chat_model: title_model_config,
-         fallbacks: []
+         chat_model: get_title_model(),
+         fallbacks: get_title_fallbacks()
        ]},
 
       # Virtual filesystem - file operations with configurable scope
@@ -227,11 +393,14 @@ defmodule AgenticRuntime.Agents.Factory do
       # SubAgent - spawn child agents for complex tasks
       # Configure block_middleware to prevent certain middleware from being
       # inherited by subagents (e.g., Summarization, ConversationTitle).
+      # AskUserQuestion is blocked because sub-agents should complete tasks
+      # autonomously without pausing to quiz the user.
       {Sagents.Middleware.SubAgent,
        [
          block_middleware: [
            Sagents.Middleware.Summarization,
-           Sagents.Middleware.ConversationTitle
+           Sagents.Middleware.ConversationTitle,
+           Sagents.Middleware.AskUserQuestion
          ]
        ]},
 
@@ -239,9 +408,19 @@ defmodule AgenticRuntime.Agents.Factory do
       Sagents.Middleware.Summarization,
 
       # PatchToolCalls - fix dangling tool calls from interrupted conversations
-      Sagents.Middleware.PatchToolCalls
+      Sagents.Middleware.PatchToolCalls,
+
+      # AskUserQuestion - structured questions with typed responses
+      # Gives the agent an `ask_user` tool for presenting single-select,
+      # multi-select, or freeform questions to the user via the interrupt/resume
+      # lifecycle. The UI renders appropriate controls based on response_type.
+      Sagents.Middleware.AskUserQuestion
     ]
-    # Conditionally add HumanInTheLoop if interrupt_on is configured.
+    # HumanInTheLoop MUST be last. During resume, HITL executes all tools
+    # (including auto-approved ones from other middleware). If those tools produce
+    # interrupts (e.g., ask_user), HITL hands off via {:cont} to the next middleware
+    # in the resume cycle. Middleware that already ran (earlier in the list) won't
+    # get a second chance, so interrupt-producing middleware must come before HITL.
     |> HumanInTheLoop.maybe_append(interrupt_on)
   end
 end

@@ -15,7 +15,7 @@ defmodule AgenticRuntime.Agents.DisplayMessagePersistence do
   alias LangChain.Message
 
   @impl true
-  def save_message(conversation_id, %Message{} = message) do
+  def save_message(scope, %Message{} = message, context) do
     display_items = DisplayHelpers.extract_display_items(message)
 
     if Enum.empty?(display_items) do
@@ -36,7 +36,11 @@ defmodule AgenticRuntime.Agents.DisplayMessagePersistence do
             attrs
           end
 
-        case AgenticRuntime.Conversations.append_display_message(conversation_id, attrs) do
+        case AgenticRuntime.Conversations.append_display_message(
+               scope,
+               context.conversation_id,
+               attrs
+             ) do
           {:ok, display_msg} ->
             {:cont, {:ok, acc ++ [display_msg]}}
 
@@ -52,11 +56,16 @@ defmodule AgenticRuntime.Agents.DisplayMessagePersistence do
   end
 
   @impl true
-  def update_tool_status(:executing, %{call_id: call_id}) do
-    AgenticRuntime.Conversations.mark_tool_executing(call_id)
+  def update_tool_status(scope, :executing, %{call_id: call_id}, _context) do
+    AgenticRuntime.Conversations.mark_tool_executing(scope, call_id)
   end
 
-  def update_tool_status(:completed, %{call_id: call_id, result: result} = tool_info) do
+  def update_tool_status(
+        scope,
+        :completed,
+        %{call_id: call_id, result: result} = tool_info,
+        _context
+      ) do
     metadata = %{"result" => result}
 
     metadata =
@@ -65,15 +74,26 @@ defmodule AgenticRuntime.Agents.DisplayMessagePersistence do
         text -> Map.put(metadata, "display_text", text)
       end
 
-    AgenticRuntime.Conversations.complete_tool_call(call_id, metadata)
+    AgenticRuntime.Conversations.complete_tool_call(scope, call_id, metadata)
   end
 
-  def update_tool_status(:failed, %{call_id: call_id, error: error}) do
-    AgenticRuntime.Conversations.fail_tool_call(call_id, %{"error" => error})
+  def update_tool_status(scope, :failed, %{call_id: call_id, error: error}, _context) do
+    AgenticRuntime.Conversations.fail_tool_call(scope, call_id, %{"error" => error})
   end
 
-  def update_tool_status(:interrupted, %{call_id: call_id, display_text: display_text}) do
-    AgenticRuntime.Conversations.interrupt_tool_call(call_id, %{"display_text" => display_text})
+  def update_tool_status(
+        scope,
+        :interrupted,
+        %{call_id: call_id, display_text: display_text},
+        _context
+      ) do
+    AgenticRuntime.Conversations.interrupt_tool_call(scope, call_id, %{
+      "display_text" => display_text
+    })
+  end
+
+  def update_tool_status(scope, :cancelled, %{call_id: call_id}, _context) do
+    AgenticRuntime.Conversations.cancel_tool_call(scope, call_id)
   end
 
   @doc """
@@ -81,7 +101,11 @@ defmodule AgenticRuntime.Agents.DisplayMessagePersistence do
   Called after a sub-agent resumes and completes.
   """
   @impl true
-  def resolve_tool_result(tool_call_id, result_content) do
-    AgenticRuntime.Conversations.resolve_interrupted_tool_result(tool_call_id, result_content)
+  def resolve_tool_result(scope, tool_call_id, result_content, _context) do
+    AgenticRuntime.Conversations.resolve_interrupted_tool_result(
+      scope,
+      tool_call_id,
+      result_content
+    )
   end
 end

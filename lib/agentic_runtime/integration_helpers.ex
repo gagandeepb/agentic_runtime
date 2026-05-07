@@ -70,7 +70,8 @@ defmodule AgenticRuntime.IntegrationHelpers do
   the generated functions directly.
   """
 
-  import Phoenix.Socket, only: [assign: 3]
+  import Phoenix.LiveView, only: [stream: 4, stream_insert: 3, put_flash: 3, connected?: 1]
+  import Phoenix.Component, only: [assign: 3]
 
   alias AgenticRuntime.Conversations
   alias AgenticRuntime.Agents.Coordinator
@@ -116,6 +117,9 @@ defmodule AgenticRuntime.IntegrationHelpers do
   - `:streaming_delta` - nil
   - `:loading` - false
   - `:pending_tools` - []
+  - `:pending_question` - nil
+  - `:remaining_questions` - []
+  - `:question_responses` - []
   - `:interrupt_data` - nil
   - `:hitl_decisions` - []
   - `:messages` stream - empty (reset: true)
@@ -131,9 +135,12 @@ defmodule AgenticRuntime.IntegrationHelpers do
     |> assign(:streaming_delta, nil)
     |> assign(:loading, false)
     |> assign(:pending_tools, [])
+    |> assign(:pending_question, nil)
+    |> assign(:remaining_questions, [])
+    |> assign(:question_responses, [])
     |> assign(:interrupt_data, nil)
     |> assign(:hitl_decisions, [])
-    |> assign(:messages, [])
+    |> stream(:messages, [], reset: true)
   end
 
   @doc """
@@ -204,10 +211,10 @@ defmodule AgenticRuntime.IntegrationHelpers do
       # Subscribe to agent events and track presence
       socket = maybe_subscribe_and_track(socket, conversation_id, user_id)
 
-      # Load display messages and todos
-      display_messages = conversations.load_display_messages(conversation_id)
+      # Load display messages and todos (scoped)
+      display_messages = conversations.load_display_messages(scope, conversation_id)
       has_messages = !Enum.empty?(display_messages)
-      saved_todos = conversations.load_todos(conversation_id)
+      saved_todos = conversations.load_todos(scope, conversation_id)
 
       # Check if agent is already running
       agent_status = AgentServer.get_status(agent_id)
@@ -220,7 +227,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
         |> assign(:agent_id, agent_id)
         |> assign(:todos, saved_todos)
         |> assign(:agent_status, agent_status)
-        |> assign(:messages, display_messages)
+        |> stream(:messages, display_messages, reset: true)
         |> assign(:has_messages, has_messages)
 
       # Restore HITL state if agent is interrupted (e.g. after LiveView reconnect)
@@ -237,7 +244,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
       Ecto.NoResultsError ->
         socket =
           socket
-          |> assign(:put_flash, "Error: Conversation not found")
+          |> put_flash(:error, "Conversation not found")
 
         {:error, socket}
     end
@@ -275,7 +282,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
   """
   def reset_conversation(socket) do
     # Unsubscribe from current conversation if connected
-    if  socket.assigns[:conversation_id] do
+    if connected?(socket) && socket.assigns[:conversation_id] do
       :ok = Coordinator.unsubscribe_from_conversation(socket.assigns.conversation_id)
       Logger.debug("Unsubscribed from conversation #{socket.assigns.conversation_id}")
     end
@@ -287,7 +294,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
   # === PRIVATE HELPERS FOR STATE MANAGEMENT ===
 
   defp maybe_unsubscribe_previous(socket, conversation_id) do
-    if  socket.assigns[:conversation_id] &&
+    if connected?(socket) && socket.assigns[:conversation_id] &&
          socket.assigns.conversation_id != conversation_id do
       :ok = Coordinator.unsubscribe_from_conversation(socket.assigns.conversation_id)
       Logger.debug("Unsubscribed from previous conversation #{socket.assigns.conversation_id}")
@@ -297,6 +304,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
   end
 
   defp maybe_subscribe_and_track(socket, conversation_id, user_id) do
+    if connected?(socket) do
       :ok = Coordinator.ensure_subscribed_to_conversation(conversation_id)
 
       if user_id do
@@ -312,6 +320,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
             :ok
         end
       end
+    end
 
     socket
   end
@@ -342,26 +351,14 @@ defmodule AgenticRuntime.IntegrationHelpers do
   @doc """
   Handles agent status change to :cancelled (user cancelled execution).
 
-  Creates a cancellation message, updates status, clears loading and streaming state.
-
-  Note: Does NOT persist agent state after cancellation because the state may be
-  inconsistent or incomplete after the task was killed.
+  The cancellation message is persisted as a display message by AgentServer and
+  arrives via `{:display_message_saved, ...}`. This handler just updates UI state.
   """
   def handle_status_cancelled(socket) do
-    cancellation_text = "_Agent execution cancelled by user. Partial response discarded._"
-
-    cancellation_message =
-      create_or_persist_message(
-        socket,
-        :assistant,
-        cancellation_text
-      )
-
     socket
     |> assign(:loading, false)
     |> assign(:agent_status, :cancelled)
     |> assign(:streaming_delta, nil)
-    |> assign(:messages, cancellation_message)
   end
 
   @doc """
@@ -378,22 +375,56 @@ defmodule AgenticRuntime.IntegrationHelpers do
     |> assign(:loading, false)
     |> assign(:agent_status, :error)
     |> assign(:streaming_delta, nil)
-    |> assign(:put_flash, "Error: #{error_text}")
+    |> put_flash(:error, error_text)
   end
 
   @doc """
-  Handles agent status change to :interrupted (waiting for human approval).
+  Handles agent status change to :interrupted (waiting for human input).
 
-  Extracts action requests from interrupt data and updates status.
+  Dispatches to the appropriate UI state based on interrupt type:
+  - AskUserQuestion interrupts present questions one at a time
+  - HITL interrupts present tool approval requests
+  - Multiple interrupts are unwrapped and dispatched by type
   """
   def handle_status_interrupted(socket, interrupt_data) do
-    action_requests = extract_action_requests(interrupt_data)
-
     socket
     |> assign(:loading, false)
     |> assign(:agent_status, :interrupted)
-    |> assign(:pending_tools, action_requests)
     |> assign(:interrupt_data, interrupt_data)
+    |> apply_interrupt_assigns(interrupt_data)
+  end
+
+  # Single ask_user question
+  defp apply_interrupt_assigns(socket, %{type: :ask_user_question} = question) do
+    present_questions(socket, [question])
+  end
+
+  # Multiple interrupts -- check if all are ask_user questions
+  defp apply_interrupt_assigns(socket, %{type: :multiple_interrupts, interrupts: interrupts}) do
+    if Enum.all?(interrupts, &(&1.type == :ask_user_question)) do
+      present_questions(socket, interrupts)
+    else
+      present_hitl_tools(socket, interrupts)
+    end
+  end
+
+  # HITL or other interrupt types
+  defp apply_interrupt_assigns(socket, interrupt_data) do
+    present_hitl_tools(socket, interrupt_data)
+  end
+
+  defp present_questions(socket, [first | rest]) do
+    socket
+    |> assign(:pending_question, first)
+    |> assign(:remaining_questions, rest)
+    |> assign(:question_responses, [])
+    |> assign(:pending_tools, [])
+  end
+
+  defp present_hitl_tools(socket, interrupt_data) do
+    socket
+    |> assign(:pending_tools, extract_action_requests(interrupt_data))
+    |> assign(:pending_question, nil)
   end
 
   # Sub-agent HITL: action_requests are nested inside interrupt_data.interrupt_data
@@ -441,14 +472,14 @@ defmodule AgenticRuntime.IntegrationHelpers do
   """
   def handle_display_message_saved(socket, display_msg) do
     socket =
-      if socket.assigns[:conversation_id] do
+      if socket.assigns[:conversation_id] && socket.assigns[:current_scope] do
         # Clear streaming_delta - persisted messages are now the authoritative display.
         # All display messages are saved to DB before broadcasting, so reload gets them all.
         socket
         |> assign(:streaming_delta, nil)
         |> reload_messages_from_db()
       else
-        assign(socket, :messages, display_msg)
+        stream_insert(socket, :messages, display_msg)
       end
 
     assign(socket, :has_messages, true)
@@ -520,7 +551,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
   updated record comes from the AgentServer broadcast.
   """
   def handle_display_message_updated(socket, updated_msg) do
-    assign(socket, :messages, updated_msg)
+    stream_insert(socket, :messages, updated_msg)
   end
 
   # === LIFECYCLE HANDLERS ===
@@ -588,9 +619,14 @@ defmodule AgenticRuntime.IntegrationHelpers do
   Uses reset: true to ensure proper ordering and clean state.
   """
   def reload_messages_from_db(socket) do
-    if socket.assigns[:conversation_id] do
-      messages = Conversations.load_display_messages(socket.assigns.conversation_id)
-      assign(socket, :messages, messages)
+    if socket.assigns[:conversation_id] && socket.assigns[:current_scope] do
+      messages =
+        Conversations.load_display_messages(
+          socket.assigns.current_scope,
+          socket.assigns.conversation_id
+        )
+
+      stream(socket, :messages, messages, reset: true)
     else
       socket
     end
@@ -604,8 +640,9 @@ defmodule AgenticRuntime.IntegrationHelpers do
   Returns the message map (not the socket).
   """
   def create_or_persist_message(socket, message_type, text) do
-    if socket.assigns[:conversation_id] do
+    if socket.assigns[:conversation_id] && socket.assigns[:current_scope] do
       case Conversations.append_text_message(
+             socket.assigns.current_scope,
              socket.assigns.conversation_id,
              message_type,
              text
@@ -643,6 +680,22 @@ defmodule AgenticRuntime.IntegrationHelpers do
       end
   """
   def handle_hitl_decision(socket, index, decision_type) do
+    agent_id = socket.assigns[:agent_id]
+
+    if is_nil(agent_id) do
+      Logger.error("Cannot process HITL decision: agent_id is nil (agent may have shut down)")
+
+      put_flash(
+        socket,
+        :error,
+        "Agent is no longer running. Please send a new message to continue."
+      )
+    else
+      handle_hitl_decision_impl(socket, agent_id, index, decision_type)
+    end
+  end
+
+  defp handle_hitl_decision_impl(socket, agent_id, index, decision_type) do
     pending_tools = socket.assigns.pending_tools
     decision_label = if decision_type == :approve, do: "approved", else: "rejected"
 
@@ -657,7 +710,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
 
     if remaining_tools == [] do
       # All tools decided — resume the agent with the full decisions list
-      case AgentServer.resume(socket.assigns.agent_id, accumulated) do
+      case AgentServer.resume(agent_id, accumulated) do
         :ok ->
           socket
           |> assign(:agent_status, :running)
@@ -665,11 +718,11 @@ defmodule AgenticRuntime.IntegrationHelpers do
           |> assign(:pending_tools, [])
           |> assign(:interrupt_data, nil)
           |> assign(:hitl_decisions, [])
-          |> assign(:put_flash, "Info: Agent resuming")
+          |> put_flash(:info, "Agent resuming")
 
         {:error, reason} ->
           Logger.error("Failed to resume agent: #{inspect(reason)}")
-          assign(socket, :put_flash, "Error: Failed to resume agent: #{inspect(reason)}")
+          put_flash(socket, :error, "Failed to resume agent: #{inspect(reason)}")
       end
     else
       # More tools to decide — update UI to show the next one
@@ -693,8 +746,76 @@ defmodule AgenticRuntime.IntegrationHelpers do
         _ -> tool[:tool_call_id]
       end
 
-    if call_id do
-      Conversations.record_hitl_decision(call_id, decision)
+    if call_id && socket.assigns[:current_scope] do
+      Conversations.record_hitl_decision(
+        socket.assigns.current_scope,
+        call_id,
+        decision
+      )
+    end
+  end
+
+  # === ASK USER QUESTION HANDLERS ===
+
+  @doc """
+  Handles a single question response, accumulating answers for multi-question interrupts.
+
+  When all pending questions are answered, resumes the agent with all responses.
+  Display message updates happen through the AgentServer's callback/PubSub system,
+  NOT here, so multiple LiveViews stay in sync.
+
+  ## Parameters
+
+  - `socket` - The LiveView socket
+  - `response` - A map with `:type` (:answer or :cancel) and response data.
+    Must include `:tool_call_id` matching the current question.
+  """
+  def handle_question_response(socket, response) do
+    agent_id = socket.assigns[:agent_id]
+
+    if is_nil(agent_id) do
+      Logger.error("Cannot process question response: agent_id is nil (agent may have shut down)")
+
+      put_flash(
+        socket,
+        :error,
+        "Agent is no longer running. Please send a new message to restart."
+      )
+    else
+      current_question = socket.assigns.pending_question
+      response = Map.put(response, :tool_call_id, current_question.tool_call_id)
+
+      accumulated = (socket.assigns[:question_responses] || []) ++ [response]
+      remaining = socket.assigns[:remaining_questions] || []
+
+      case remaining do
+        [] ->
+          # All questions answered -- resume the agent.
+          # Single question: send as-is. Multiple: send the list.
+          resume_data = if length(accumulated) == 1, do: hd(accumulated), else: accumulated
+
+          case AgentServer.resume(agent_id, resume_data) do
+            :ok ->
+              socket
+              |> assign(:agent_status, :running)
+              |> assign(:loading, true)
+              |> assign(:pending_question, nil)
+              |> assign(:remaining_questions, [])
+              |> assign(:question_responses, [])
+              |> assign(:interrupt_data, nil)
+
+            {:error, reason} ->
+              Logger.error("Failed to resume agent with question response: #{inspect(reason)}")
+              put_flash(socket, :error, "Failed to submit response: #{inspect(reason)}")
+          end
+
+        [next | rest] ->
+          # More questions to answer -- present the next one
+          socket
+          |> assign(:pending_question, next)
+          |> assign(:remaining_questions, rest)
+          |> assign(:question_responses, accumulated)
+      end
     end
   end
 
