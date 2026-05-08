@@ -10,6 +10,9 @@ defmodule AgenticRuntime.Agents.ServerAdapter do
   @callback cancel(String.t()) :: :ok | {:error, term()}
   @callback get_pid(String.t()) :: pid() | nil
   @callback stop(String.t()) :: :ok
+  @callback get_status(String.t()) :: atom()
+  @callback get_info(String.t()) :: map()
+  @callback resume(String.t(), term()) :: :ok | {:error, term()}
 
   def impl, do: Application.get_env(:agentic_runtime, :server_adapter, __MODULE__.Sagents)
 end
@@ -21,4 +24,7 @@ defmodule AgenticRuntime.Agents.ServerAdapter.Sagents do
   defdelegate cancel(agent_id), to: Sagents.AgentServer
   defdelegate get_pid(agent_id), to: Sagents.AgentServer
   defdelegate stop(agent_id), to: Sagents.AgentServer
+  defdelegate get_status(agent_id), to: Sagents.AgentServer
+  defdelegate get_info(agent_id), to: Sagents.AgentServer
+  defdelegate resume(agent_id, resume_data), to: Sagents.AgentServer
 end

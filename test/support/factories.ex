@@ -43,6 +43,13 @@ defmodule AgenticRuntime.Factories do
     )
   end
 
+  def insert_conversation!(scope, overrides \\ %{}) do
+    {:ok, conversation} =
+      AgenticRuntime.Conversations.create_conversation(scope, conversation_attrs(overrides))
+
+    conversation
+  end
+
   def text_message_attrs(overrides \\ %{}) do
     Map.merge(
       %{

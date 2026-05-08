@@ -35,7 +35,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
 
   alias AgenticRuntime.Conversations
   alias AgenticRuntime.Agents.Coordinator
-  alias Sagents.AgentServer
+  alias AgenticRuntime.Agents.ServerAdapter
   alias LangChain.MessageDelta
   alias LangChain.Message.ToolCall
 
@@ -120,7 +120,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
       has_messages = !Enum.empty?(display_messages)
       saved_todos = conversations.load_todos(scope, conversation_id)
 
-      agent_status = AgentServer.get_status(agent_id)
+      agent_status = ServerAdapter.impl().get_status(agent_id)
 
       socket =
         socket
@@ -135,7 +135,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
       # Restore HITL state if agent is interrupted (e.g. after channel reconnect)
       socket =
         if agent_status == :interrupted do
-          info = AgentServer.get_info(agent_id)
+          info = ServerAdapter.impl().get_info(agent_id)
           handle_status_interrupted(socket, info.interrupt_data)
         else
           socket
@@ -527,7 +527,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
     remaining_tools = List.delete_at(pending_tools, index)
 
     if remaining_tools == [] do
-      case AgentServer.resume(agent_id, accumulated) do
+      case ServerAdapter.impl().resume(agent_id, accumulated) do
         :ok ->
           socket =
             socket
@@ -610,7 +610,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
           # Single question: send as-is. Multiple: send the list.
           resume_data = if length(accumulated) == 1, do: hd(accumulated), else: accumulated
 
-          case AgentServer.resume(agent_id, resume_data) do
+          case ServerAdapter.impl().resume(agent_id, resume_data) do
             :ok ->
               socket =
                 socket
