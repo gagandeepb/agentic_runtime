@@ -28,7 +28,7 @@ defmodule AgenticRuntime.MixProject do
       {:sagents, "~> 0.7.0"},
       {:langchain,
        github: "nelsonkopliku/langchain",
-       ref: "e7a32fad6a2477ee6b1460510c4614dab8ed1263",
+       ref: "5def67f00f9113717fe6684d19ca43284c699cec",
        override: true},
       {:phoenix, "~> 1.7.14"},
       {:ecto_sql, "~> 3.12"},
