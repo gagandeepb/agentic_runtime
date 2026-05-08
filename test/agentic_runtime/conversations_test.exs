@@ -10,7 +10,9 @@ defmodule AgenticRuntime.ConversationsTest do
       scope = build_scope()
       attrs = conversation_attrs(%{title: "Hello"})
 
-      assert {:ok, %Conversation{} = conversation} = Conversations.create_conversation(scope, attrs)
+      assert {:ok, %Conversation{} = conversation} =
+               Conversations.create_conversation(scope, attrs)
+
       assert conversation.title == "Hello"
       assert conversation.user_id == scope.owner_id
     end
@@ -34,7 +36,9 @@ defmodule AgenticRuntime.ConversationsTest do
       assert found.id == c.id
     end
 
-    test "returns {:error, :not_found} when a different scope tries to read it", %{conversation: c} do
+    test "returns {:error, :not_found} when a different scope tries to read it", %{
+      conversation: c
+    } do
       other_scope = build_scope()
       assert {:error, :not_found} = Conversations.get_conversation(other_scope, c.id)
     end
@@ -120,7 +124,8 @@ defmodule AgenticRuntime.ConversationsTest do
       scope: scope,
       conversation: c
     } do
-      assert {:ok, _} = Conversations.save_agent_state(scope, c.id, %{"version" => 1, "state" => %{}})
+      assert {:ok, _} =
+               Conversations.save_agent_state(scope, c.id, %{"version" => 1, "state" => %{}})
 
       assert {:ok, _} =
                Conversations.save_agent_state(scope, c.id, %{
@@ -141,7 +146,9 @@ defmodule AgenticRuntime.ConversationsTest do
     end
 
     test "rejects reads from a different scope", %{scope: scope, conversation: c} do
-      :ok = elem(Conversations.save_agent_state(scope, c.id, %{"version" => 1, "state" => %{}}), 0)
+      :ok =
+        elem(Conversations.save_agent_state(scope, c.id, %{"version" => 1, "state" => %{}}), 0)
+
       other_scope = build_scope()
       assert {:error, :not_found} = Conversations.load_agent_state(other_scope, c.id)
     end
@@ -231,10 +238,15 @@ defmodule AgenticRuntime.ConversationsTest do
       scope = build_scope()
       conversation = insert_conversation!(scope)
       attrs = tool_call_attrs()
+
       {:ok, %DisplayMessage{} = tool_call} =
         Conversations.append_display_message(scope, conversation.id, attrs)
 
-      {:ok, scope: scope, conversation: conversation, call_id: attrs.content["call_id"], tool_call: tool_call}
+      {:ok,
+       scope: scope,
+       conversation: conversation,
+       call_id: attrs.content["call_id"],
+       tool_call: tool_call}
     end
 
     test "mark_tool_executing transitions pending -> executing", %{scope: scope, call_id: call_id} do
@@ -263,14 +275,20 @@ defmodule AgenticRuntime.ConversationsTest do
                Conversations.fail_tool_call(scope, call_id, %{"reason" => "boom"})
     end
 
-    test "interrupt_tool_call only matches pending or executing", %{scope: scope, call_id: call_id} do
+    test "interrupt_tool_call only matches pending or executing", %{
+      scope: scope,
+      call_id: call_id
+    } do
       assert {:ok, %DisplayMessage{status: "interrupted"}} =
                Conversations.interrupt_tool_call(scope, call_id)
 
       assert {:error, :not_found} = Conversations.interrupt_tool_call(scope, call_id)
     end
 
-    test "cancel_tool_call accepts pending/executing/interrupted", %{scope: scope, call_id: call_id} do
+    test "cancel_tool_call accepts pending/executing/interrupted", %{
+      scope: scope,
+      call_id: call_id
+    } do
       assert {:ok, %DisplayMessage{status: "cancelled"}} =
                Conversations.cancel_tool_call(scope, call_id)
     end

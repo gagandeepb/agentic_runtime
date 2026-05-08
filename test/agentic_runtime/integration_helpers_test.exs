@@ -269,7 +269,9 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
 
       assert updated.assigns.pending_question == q2
       assert updated.assigns.remaining_questions == []
-      assert [%{type: :answer, value: "yes", tool_call_id: "q1"}] = updated.assigns.question_responses
+
+      assert [%{type: :answer, value: "yes", tool_call_id: "q1"}] =
+               updated.assigns.question_responses
     end
 
     test "resumes with single answer when only one question was asked" do
