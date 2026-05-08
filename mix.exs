@@ -7,9 +7,13 @@ defmodule AgenticRuntime.MixProject do
       version: "0.1.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
+      elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps()
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   # Run "mix help compile.app" to learn about applications.
   def application do
@@ -26,9 +30,11 @@ defmodule AgenticRuntime.MixProject do
        github: "nelsonkopliku/langchain",
        ref: "e7a32fad6a2477ee6b1460510c4614dab8ed1263",
        override: true},
-      {:phoenix, "~> 1.7.14"}
-      # {:dep_from_hexpm, "~> 0.3.0"},
-      # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
+      {:phoenix, "~> 1.7.14"},
+      {:ecto_sql, "~> 3.12"},
+      {:postgrex, ">= 0.0.0", only: [:dev, :test]},
+      {:mox, "~> 1.2", only: :test},
+      {:faker, "~> 0.18", only: :test}
     ]
   end
 end

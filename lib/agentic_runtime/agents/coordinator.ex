@@ -40,7 +40,9 @@ defmodule AgenticRuntime.Agents.Coordinator do
         presence_module: MyAppWeb.Presence
   """
 
-  alias Sagents.{State, AgentServer, AgentSupervisor, AgentsDynamicSupervisor}
+  alias AgenticRuntime.Agents.ServerAdapter
+  alias AgenticRuntime.Agents.SupervisorAdapter
+  alias Sagents.{State, AgentSupervisor}
   require Logger
 
   @pubsub_module Phoenix.PubSub
@@ -91,7 +93,7 @@ defmodule AgenticRuntime.Agents.Coordinator do
 
     agent_id = conversation_agent_id(conversation_id)
 
-    case AgentServer.get_pid(agent_id) do
+    case ServerAdapter.impl().get_pid(agent_id) do
       nil ->
         do_start_session(conversation_id, agent_id, filesystem_scope, opts)
 
@@ -116,12 +118,12 @@ defmodule AgenticRuntime.Agents.Coordinator do
   def stop_conversation_session(conversation_id) do
     agent_id = conversation_agent_id(conversation_id)
 
-    case AgentServer.get_pid(agent_id) do
+    case ServerAdapter.impl().get_pid(agent_id) do
       nil ->
         {:ok, :not_running}
 
       _pid ->
-        AgentServer.stop(agent_id)
+        ServerAdapter.impl().stop(agent_id)
         {:ok, :stopped}
     end
   end
@@ -129,7 +131,7 @@ defmodule AgenticRuntime.Agents.Coordinator do
   @doc "Checks if an agent session is currently running."
   def session_running?(conversation_id) do
     agent_id = conversation_agent_id(conversation_id)
-    AgentServer.get_pid(agent_id) != nil
+    ServerAdapter.impl().get_pid(agent_id) != nil
   end
 
   @doc "Maps a conversation ID to an agent ID."
@@ -260,13 +262,13 @@ defmodule AgenticRuntime.Agents.Coordinator do
       display_message_persistence: AgenticRuntime.Agents.DisplayMessagePersistence
     ]
 
-    case AgentsDynamicSupervisor.start_agent_sync(supervisor_config) do
+    case SupervisorAdapter.impl().start_agent_sync(supervisor_config) do
       {:ok, _supervisor_pid} ->
-        pid = AgentServer.get_pid(agent_id)
+        pid = ServerAdapter.impl().get_pid(agent_id)
         {:ok, %{agent_id: agent_id, pid: pid, conversation_id: conversation_id}}
 
       {:ok, _supervisor_pid, :already_started} ->
-        pid = AgentServer.get_pid(agent_id)
+        pid = ServerAdapter.impl().get_pid(agent_id)
         {:ok, %{agent_id: agent_id, pid: pid, conversation_id: conversation_id}}
 
       {:error, reason} ->
