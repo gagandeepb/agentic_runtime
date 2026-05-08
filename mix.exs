@@ -22,6 +22,10 @@ defmodule AgenticRuntime.MixProject do
   defp deps do
     [
       {:sagents, "~> 0.7.0"},
+      {:langchain,
+       github: "nelsonkopliku/langchain",
+       ref: "e7a32fad6a2477ee6b1460510c4614dab8ed1263",
+       override: true},
       {:phoenix, "~> 1.7.14"}
       # {:dep_from_hexpm, "~> 0.3.0"},
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
