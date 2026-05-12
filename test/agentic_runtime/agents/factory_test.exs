@@ -18,19 +18,22 @@ defmodule AgenticRuntime.Agents.FactoryTest do
 
       modules = Enum.map(agent.middleware, & &1.module)
 
+      # DISABLED (plan: valiant-twirling-crown): FileSystem + AskUserQuestion removed from stack
       expected = [
         Sagents.Middleware.TodoList,
         Sagents.Middleware.ConversationTitle,
-        Sagents.Middleware.FileSystem,
+        # Sagents.Middleware.FileSystem,
         Sagents.Middleware.SubAgent,
         Sagents.Middleware.Summarization,
-        Sagents.Middleware.PatchToolCalls,
-        Sagents.Middleware.AskUserQuestion
+        Sagents.Middleware.PatchToolCalls
+        # Sagents.Middleware.AskUserQuestion
       ]
 
       assert modules == expected
     end
 
+    # DISABLED (plan: valiant-twirling-crown): HumanInTheLoop append removed from factory
+    @tag :skip
     test "appends HumanInTheLoop when :interrupt_on is provided" do
       assert {:ok, agent} =
                Factory.create_agent(

@@ -77,14 +77,15 @@ defmodule AgenticRuntimeTest do
 
       modules = Enum.map(agent.middleware, & &1.module)
 
+      # DISABLED (plan: valiant-twirling-crown): FileSystem + AskUserQuestion removed from stack
       for expected <- [
             Sagents.Middleware.TodoList,
             Sagents.Middleware.ConversationTitle,
-            Sagents.Middleware.FileSystem,
+            # Sagents.Middleware.FileSystem,
             Sagents.Middleware.SubAgent,
             Sagents.Middleware.Summarization,
-            Sagents.Middleware.PatchToolCalls,
-            Sagents.Middleware.AskUserQuestion
+            Sagents.Middleware.PatchToolCalls
+            # Sagents.Middleware.AskUserQuestion
           ] do
         assert expected in modules, "expected #{inspect(expected)} in middleware stack"
       end

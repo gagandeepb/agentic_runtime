@@ -71,6 +71,10 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
       assert result.assigns.last_error_message =~ "rate limited"
     end
 
+    # DISABLED (plan: valiant-twirling-crown): handle_status_interrupted is now a stub
+    # that only sets :agent_status + :interrupt_data. AskUserQuestion / HITL dispatch
+    # was commented out alongside their middleware.
+    @tag :skip
     test "handle_status_interrupted with ask_user_question presents the question" do
       interrupt = %{
         type: :ask_user_question,
@@ -89,6 +93,8 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
       assert result.assigns.loading == false
     end
 
+    # DISABLED (plan: valiant-twirling-crown): same — multi-question dispatch removed
+    @tag :skip
     test "handle_status_interrupted with multi-question interrupt queues remaining" do
       q1 = %{type: :ask_user_question, tool_call_id: "q1", question: "first?"}
       q2 = %{type: :ask_user_question, tool_call_id: "q2", question: "second?"}
@@ -102,6 +108,8 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
       assert result.assigns.remaining_questions == [q2]
     end
 
+    # DISABLED (plan: valiant-twirling-crown): HITL pending_tools dispatch removed
+    @tag :skip
     test "handle_status_interrupted with HITL interrupt presents pending tools" do
       interrupt = %{
         action_requests: [%{tool_call_id: "t1", name: "delete"}]
@@ -175,7 +183,9 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
     end
   end
 
+  # DISABLED (plan: valiant-twirling-crown): HITL middleware removed; handler commented out
   describe "handle_hitl_decision/3" do
+    @describetag :skip
     test "errors when no agent is running" do
       result =
         socket(%{agent_id: nil, pending_tools: [%{tool_call_id: "x"}]})
@@ -243,7 +253,9 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
     end
   end
 
+  # DISABLED (plan: valiant-twirling-crown): AskUserQuestion middleware removed; handler commented out
   describe "handle_question_response/2" do
+    @describetag :skip
     test "errors when no agent is running" do
       result =
         socket(%{agent_id: nil, pending_question: %{tool_call_id: "q"}})

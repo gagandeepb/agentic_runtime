@@ -23,8 +23,8 @@ defmodule AgenticRuntime.IntegrationHelpers do
   - Message handlers (LLM deltas, message complete, display messages)
   - Tool execution handlers (identified, executing, completed)
   - Lifecycle handlers (title generated, agent shutdown)
-  - HITL approval / rejection (`handle_hitl_decision/3`)
-  - AskUserQuestion responses (`handle_question_response/2`)
+  - HITL approval / rejection (`handle_hitl_decision/3`) — DISABLED (plan: valiant-twirling-crown)
+  - AskUserQuestion responses (`handle_question_response/2`) — DISABLED (plan: valiant-twirling-crown)
 
   By default these helpers talk to `AgenticRuntime.Conversations` and
   `AgenticRuntime.Agents.Coordinator`. Pass `:conversations_module` to
@@ -238,59 +238,58 @@ defmodule AgenticRuntime.IntegrationHelpers do
   end
 
   @doc """
-  Handles agent status change to :interrupted (waiting for human input).
+  Handles agent status change to :interrupted.
 
-  Dispatches to the appropriate UI state based on interrupt type:
-  - AskUserQuestion interrupts present questions one at a time
-  - HITL interrupts present tool approval requests
-  - Multiple interrupts are unwrapped and dispatched by type
+  DISABLED (plan: valiant-twirling-crown): with FileSystem + HITL + AskUserQuestion
+  middleware all removed from the stack, no middleware can fire `:interrupted`.
+  Stubbed to just record the status; no interrupt-type dispatch.
   """
   def handle_status_interrupted(socket, interrupt_data) do
     socket
     |> assign(:loading, false)
     |> assign(:agent_status, :interrupted)
     |> assign(:interrupt_data, interrupt_data)
-    |> apply_interrupt_assigns(interrupt_data)
   end
 
-  defp apply_interrupt_assigns(socket, %{type: :ask_user_question} = question) do
-    present_questions(socket, [question])
-  end
-
-  defp apply_interrupt_assigns(socket, %{type: :multiple_interrupts, interrupts: interrupts}) do
-    if Enum.all?(interrupts, &(&1.type == :ask_user_question)) do
-      present_questions(socket, interrupts)
-    else
-      present_hitl_tools(socket, interrupts)
-    end
-  end
-
-  defp apply_interrupt_assigns(socket, interrupt_data) do
-    present_hitl_tools(socket, interrupt_data)
-  end
-
-  defp present_questions(socket, [first | rest]) do
-    socket
-    |> assign(:pending_question, first)
-    |> assign(:remaining_questions, rest)
-    |> assign(:question_responses, [])
-    |> assign(:pending_tools, [])
-  end
-
-  defp present_hitl_tools(socket, interrupt_data) do
-    socket
-    |> assign(:pending_tools, extract_action_requests(interrupt_data))
-    |> assign(:pending_question, nil)
-  end
-
-  # Sub-agent HITL: action_requests are nested inside interrupt_data.interrupt_data
-  defp extract_action_requests(%{type: :subagent_hitl, interrupt_data: inner}) do
-    Map.get(inner, :action_requests, [])
-  end
-
-  defp extract_action_requests(interrupt_data) do
-    Map.get(interrupt_data, :action_requests, [])
-  end
+  # DISABLED (plan: valiant-twirling-crown): interrupt-type dispatch helpers
+  # defp apply_interrupt_assigns(socket, %{type: :ask_user_question} = question) do
+  #   present_questions(socket, [question])
+  # end
+  #
+  # defp apply_interrupt_assigns(socket, %{type: :multiple_interrupts, interrupts: interrupts}) do
+  #   if Enum.all?(interrupts, &(&1.type == :ask_user_question)) do
+  #     present_questions(socket, interrupts)
+  #   else
+  #     present_hitl_tools(socket, interrupts)
+  #   end
+  # end
+  #
+  # defp apply_interrupt_assigns(socket, interrupt_data) do
+  #   present_hitl_tools(socket, interrupt_data)
+  # end
+  #
+  # defp present_questions(socket, [first | rest]) do
+  #   socket
+  #   |> assign(:pending_question, first)
+  #   |> assign(:remaining_questions, rest)
+  #   |> assign(:question_responses, [])
+  #   |> assign(:pending_tools, [])
+  # end
+  #
+  # defp present_hitl_tools(socket, interrupt_data) do
+  #   socket
+  #   |> assign(:pending_tools, extract_action_requests(interrupt_data))
+  #   |> assign(:pending_question, nil)
+  # end
+  #
+  # # Sub-agent HITL: action_requests are nested inside interrupt_data.interrupt_data
+  # defp extract_action_requests(%{type: :subagent_hitl, interrupt_data: inner}) do
+  #   Map.get(inner, :action_requests, [])
+  # end
+  #
+  # defp extract_action_requests(interrupt_data) do
+  #   Map.get(interrupt_data, :action_requests, [])
+  # end
 
   # === MESSAGING HANDLERS ===
 
@@ -496,149 +495,153 @@ defmodule AgenticRuntime.IntegrationHelpers do
   end
 
   # === HITL DECISION HANDLERS ===
+  # DISABLED (plan: valiant-twirling-crown): HumanInTheLoop middleware removed from factory.
+  # Entire section commented out; channel has no UI to drive these handlers.
 
-  @doc """
-  Handles a single HITL approve/reject decision.
-
-  Accumulates decisions and only resumes the agent once all pending tools are
-  decided. Returns `{:ok, socket}` or `{:error, reason, socket}` so the caller
-  can push the relevant event to the client.
-  """
-  def handle_hitl_decision(socket, index, decision_type) do
-    agent_id = socket.assigns[:agent_id]
-
-    if is_nil(agent_id) do
-      Logger.error("Cannot process HITL decision: agent_id is nil (agent may have shut down)")
-      {:error, :agent_not_running, socket}
-    else
-      handle_hitl_decision_impl(socket, agent_id, index, decision_type)
-    end
-  end
-
-  defp handle_hitl_decision_impl(socket, agent_id, index, decision_type) do
-    pending_tools = socket.assigns.pending_tools
-    decision_label = if decision_type == :approve, do: "approved", else: "rejected"
-
-    persist_hitl_decision(socket, pending_tools, index, decision_label)
-
-    Logger.info("#{String.capitalize(decision_label)} tool at index #{index}")
-
-    accumulated = (socket.assigns[:hitl_decisions] || []) ++ [%{type: decision_type}]
-    remaining_tools = List.delete_at(pending_tools, index)
-
-    if remaining_tools == [] do
-      case ServerAdapter.impl().resume(agent_id, accumulated) do
-        :ok ->
-          socket =
-            socket
-            |> assign(:agent_status, :running)
-            |> assign(:loading, true)
-            |> assign(:pending_tools, [])
-            |> assign(:interrupt_data, nil)
-            |> assign(:hitl_decisions, [])
-
-          {:ok, socket}
-
-        {:error, reason} ->
-          Logger.error("Failed to resume agent: #{inspect(reason)}")
-          {:error, {:resume_failed, reason}, socket}
-      end
-    else
-      socket =
-        socket
-        |> assign(:pending_tools, remaining_tools)
-        |> assign(:hitl_decisions, accumulated)
-
-      {:ok, socket}
-    end
-  end
-
-  # Persist HITL decision on the correct tool call display message.
-  # For sub-agent HITL, the action_request's tool_call_id belongs to the sub-agent's
-  # inner tool call, not the parent's "task" tool call. Use the parent's tool_call_id
-  # from the top-level interrupt_data instead.
-  defp persist_hitl_decision(socket, pending_tools, index, decision) do
-    interrupt_data = socket.assigns[:interrupt_data]
-    tool = Enum.at(pending_tools, index)
-
-    call_id =
-      case interrupt_data do
-        %{type: :subagent_hitl, tool_call_id: parent_call_id} -> parent_call_id
-        _ -> tool[:tool_call_id]
-      end
-
-    if call_id && socket.assigns[:current_scope] do
-      Conversations.record_hitl_decision(
-        socket.assigns.current_scope,
-        call_id,
-        decision
-      )
-    end
-  end
+  # @doc """
+  # Handles a single HITL approve/reject decision.
+  #
+  # Accumulates decisions and only resumes the agent once all pending tools are
+  # decided. Returns `{:ok, socket}` or `{:error, reason, socket}` so the caller
+  # can push the relevant event to the client.
+  # """
+  # def handle_hitl_decision(socket, index, decision_type) do
+  #   agent_id = socket.assigns[:agent_id]
+  #
+  #   if is_nil(agent_id) do
+  #     Logger.error("Cannot process HITL decision: agent_id is nil (agent may have shut down)")
+  #     {:error, :agent_not_running, socket}
+  #   else
+  #     handle_hitl_decision_impl(socket, agent_id, index, decision_type)
+  #   end
+  # end
+  #
+  # defp handle_hitl_decision_impl(socket, agent_id, index, decision_type) do
+  #   pending_tools = socket.assigns.pending_tools
+  #   decision_label = if decision_type == :approve, do: "approved", else: "rejected"
+  #
+  #   persist_hitl_decision(socket, pending_tools, index, decision_label)
+  #
+  #   Logger.info("#{String.capitalize(decision_label)} tool at index #{index}")
+  #
+  #   accumulated = (socket.assigns[:hitl_decisions] || []) ++ [%{type: decision_type}]
+  #   remaining_tools = List.delete_at(pending_tools, index)
+  #
+  #   if remaining_tools == [] do
+  #     case ServerAdapter.impl().resume(agent_id, accumulated) do
+  #       :ok ->
+  #         socket =
+  #           socket
+  #           |> assign(:agent_status, :running)
+  #           |> assign(:loading, true)
+  #           |> assign(:pending_tools, [])
+  #           |> assign(:interrupt_data, nil)
+  #           |> assign(:hitl_decisions, [])
+  #
+  #         {:ok, socket}
+  #
+  #       {:error, reason} ->
+  #         Logger.error("Failed to resume agent: #{inspect(reason)}")
+  #         {:error, {:resume_failed, reason}, socket}
+  #     end
+  #   else
+  #     socket =
+  #       socket
+  #       |> assign(:pending_tools, remaining_tools)
+  #       |> assign(:hitl_decisions, accumulated)
+  #
+  #     {:ok, socket}
+  #   end
+  # end
+  #
+  # # Persist HITL decision on the correct tool call display message.
+  # # For sub-agent HITL, the action_request's tool_call_id belongs to the sub-agent's
+  # # inner tool call, not the parent's "task" tool call. Use the parent's tool_call_id
+  # # from the top-level interrupt_data instead.
+  # defp persist_hitl_decision(socket, pending_tools, index, decision) do
+  #   interrupt_data = socket.assigns[:interrupt_data]
+  #   tool = Enum.at(pending_tools, index)
+  #
+  #   call_id =
+  #     case interrupt_data do
+  #       %{type: :subagent_hitl, tool_call_id: parent_call_id} -> parent_call_id
+  #       _ -> tool[:tool_call_id]
+  #     end
+  #
+  #   if call_id && socket.assigns[:current_scope] do
+  #     Conversations.record_hitl_decision(
+  #       socket.assigns.current_scope,
+  #       call_id,
+  #       decision
+  #     )
+  #   end
+  # end
 
   # === ASK USER QUESTION HANDLERS ===
+  # DISABLED (plan: valiant-twirling-crown): AskUserQuestion middleware removed from factory.
+  # Channel has no handle_in for question responses, so this is dead code.
 
-  @doc """
-  Handles a single question response, accumulating answers for multi-question interrupts.
-
-  When all pending questions are answered, resumes the agent with all responses.
-  Returns `{:ok, socket}` or `{:error, reason, socket}` so the caller can push
-  the relevant event to the client.
-
-  ## Parameters
-
-  - `socket` - The channel socket
-  - `response` - A map with `:type` (`:answer` or `:cancel`) and response data.
-    `:tool_call_id` is set automatically from the current pending question.
-  """
-  def handle_question_response(socket, response) do
-    agent_id = socket.assigns[:agent_id]
-
-    if is_nil(agent_id) do
-      Logger.error("Cannot process question response: agent_id is nil (agent may have shut down)")
-      {:error, :agent_not_running, socket}
-    else
-      current_question = socket.assigns.pending_question
-      response = Map.put(response, :tool_call_id, current_question.tool_call_id)
-
-      accumulated = (socket.assigns[:question_responses] || []) ++ [response]
-      remaining = socket.assigns[:remaining_questions] || []
-
-      case remaining do
-        [] ->
-          # All questions answered — resume the agent.
-          # Single question: send as-is. Multiple: send the list.
-          resume_data = if length(accumulated) == 1, do: hd(accumulated), else: accumulated
-
-          case ServerAdapter.impl().resume(agent_id, resume_data) do
-            :ok ->
-              socket =
-                socket
-                |> assign(:agent_status, :running)
-                |> assign(:loading, true)
-                |> assign(:pending_question, nil)
-                |> assign(:remaining_questions, [])
-                |> assign(:question_responses, [])
-                |> assign(:interrupt_data, nil)
-
-              {:ok, socket}
-
-            {:error, reason} ->
-              Logger.error("Failed to resume agent with question response: #{inspect(reason)}")
-              {:error, {:resume_failed, reason}, socket}
-          end
-
-        [next | rest] ->
-          socket =
-            socket
-            |> assign(:pending_question, next)
-            |> assign(:remaining_questions, rest)
-            |> assign(:question_responses, accumulated)
-
-          {:ok, socket}
-      end
-    end
-  end
+  # @doc """
+  # Handles a single question response, accumulating answers for multi-question interrupts.
+  #
+  # When all pending questions are answered, resumes the agent with all responses.
+  # Returns `{:ok, socket}` or `{:error, reason, socket}` so the caller can push
+  # the relevant event to the client.
+  #
+  # ## Parameters
+  #
+  # - `socket` - The channel socket
+  # - `response` - A map with `:type` (`:answer` or `:cancel`) and response data.
+  #   `:tool_call_id` is set automatically from the current pending question.
+  # """
+  # def handle_question_response(socket, response) do
+  #   agent_id = socket.assigns[:agent_id]
+  #
+  #   if is_nil(agent_id) do
+  #     Logger.error("Cannot process question response: agent_id is nil (agent may have shut down)")
+  #     {:error, :agent_not_running, socket}
+  #   else
+  #     current_question = socket.assigns.pending_question
+  #     response = Map.put(response, :tool_call_id, current_question.tool_call_id)
+  #
+  #     accumulated = (socket.assigns[:question_responses] || []) ++ [response]
+  #     remaining = socket.assigns[:remaining_questions] || []
+  #
+  #     case remaining do
+  #       [] ->
+  #         # All questions answered — resume the agent.
+  #         # Single question: send as-is. Multiple: send the list.
+  #         resume_data = if length(accumulated) == 1, do: hd(accumulated), else: accumulated
+  #
+  #         case ServerAdapter.impl().resume(agent_id, resume_data) do
+  #           :ok ->
+  #             socket =
+  #               socket
+  #               |> assign(:agent_status, :running)
+  #               |> assign(:loading, true)
+  #               |> assign(:pending_question, nil)
+  #               |> assign(:remaining_questions, [])
+  #               |> assign(:question_responses, [])
+  #               |> assign(:interrupt_data, nil)
+  #
+  #             {:ok, socket}
+  #
+  #           {:error, reason} ->
+  #             Logger.error("Failed to resume agent with question response: #{inspect(reason)}")
+  #             {:error, {:resume_failed, reason}, socket}
+  #         end
+  #
+  #       [next | rest] ->
+  #         socket =
+  #           socket
+  #           |> assign(:pending_question, next)
+  #           |> assign(:remaining_questions, rest)
+  #           |> assign(:question_responses, accumulated)
+  #
+  #         {:ok, socket}
+  #     end
+  #   end
+  # end
 
   # === PRIVATE HELPERS ===
 

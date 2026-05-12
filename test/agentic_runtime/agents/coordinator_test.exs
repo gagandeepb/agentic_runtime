@@ -67,6 +67,8 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
   end
 
   describe "start_conversation_session/2" do
+    # DISABLED (plan: valiant-twirling-crown): :filesystem_scope is now optional
+    @tag :skip
     test "raises ArgumentError when :filesystem_scope is missing" do
       assert_raise ArgumentError, ~r/filesystem_scope/, fn ->
         Coordinator.start_conversation_session("conv-1", scope: build_scope())

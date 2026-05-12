@@ -58,7 +58,9 @@ defmodule AgenticRuntime.Agents.Coordinator do
 
   ## Options
 
-  - `:filesystem_scope` (required) — Filesystem scope tuple, e.g. `{:user, user_id}`.
+  - `:filesystem_scope` — DISABLED (plan: valiant-twirling-crown). Accepted for backward
+    compatibility but ignored — FileSystem middleware is commented out in `Factory`.
+    Was: required filesystem scope tuple, e.g. `{:user, user_id}`.
   - `:scope` — Integrator-defined scope struct (see `AgenticRuntime.Scope`).
     In production this should come from the caller's session. `nil` is allowed
     for tests, admin scripts, or background jobs without a tenant context.
@@ -73,23 +75,26 @@ defmodule AgenticRuntime.Agents.Coordinator do
   - `{:error, reason}` — Failed to start
   """
   def start_conversation_session(conversation_id, opts \\ []) do
-    filesystem_scope =
-      case Keyword.fetch(opts, :filesystem_scope) do
-        {:ok, scope_value} ->
-          scope_value
+    # DISABLED (plan: valiant-twirling-crown): :filesystem_scope is now optional;
+    # FileSystem middleware is commented out in factory. Opt is forwarded but ignored.
+    filesystem_scope = Keyword.get(opts, :filesystem_scope)
 
-        :error ->
-          raise ArgumentError, """
-          Missing required :filesystem_scope option.
-
-          Please pass the filesystem scope when starting a session:
-
-              AgenticRuntime.Agents.Coordinator.start_conversation_session(
-                conversation_id,
-                filesystem_scope: {:user, user_id}
-              )
-          """
-      end
+    # case Keyword.fetch(opts, :filesystem_scope) do
+    #   {:ok, scope_value} ->
+    #     scope_value
+    #
+    #   :error ->
+    #     raise ArgumentError, """
+    #     Missing required :filesystem_scope option.
+    #
+    #     Please pass the filesystem scope when starting a session:
+    #
+    #         AgenticRuntime.Agents.Coordinator.start_conversation_session(
+    #           conversation_id,
+    #           filesystem_scope: {:user, user_id}
+    #         )
+    #     """
+    # end
 
     agent_id = conversation_agent_id(conversation_id)
 

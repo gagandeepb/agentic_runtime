@@ -25,7 +25,8 @@ defmodule AgenticRuntime.Agents.Factory do
   alias LangChain.ChatModels.ChatOpenAI
   alias Sagents.Agent
   alias Sagents.Middleware.ConversationTitle
-  alias Sagents.Middleware.HumanInTheLoop
+  # DISABLED (plan: valiant-twirling-crown): HITL middleware removed from stack
+  # alias Sagents.Middleware.HumanInTheLoop
 
   @doc """
   Creates an agent with the standard configuration.
@@ -52,11 +53,13 @@ defmodule AgenticRuntime.Agents.Factory do
     agent_id = Keyword.fetch!(opts, :agent_id)
     main_model_config = Keyword.fetch!(opts, :model_config)
     base_system_prompt = Keyword.fetch!(opts, :base_system_prompt)
+    # DISABLED (plan: valiant-twirling-crown): FileSystem middleware removed; opt accepted-but-ignored
     filesystem_scope = Keyword.get(opts, :filesystem_scope, nil)
     title_model_config = Keyword.get(opts, :title_model_config, main_model_config)
     tools = Keyword.get(opts, :tools, [])
     fallback_models = Keyword.get(opts, :fallback_models, [])
     before_fallback = Keyword.get(opts, :before_fallback, nil)
+    # DISABLED (plan: valiant-twirling-crown): HITL middleware removed; opt accepted-but-ignored
     interrupt_on = Keyword.get(opts, :interrupt_on, default_interrupt_on())
     scope = Keyword.get(opts, :scope)
     tool_context = Keyword.get(opts, :tool_context, %{})
@@ -130,7 +133,7 @@ defmodule AgenticRuntime.Agents.Factory do
   #
   # HumanInTheLoop is conditionally appended last so it can dispatch to
   # interrupt-producing middleware that ran earlier.
-  defp build_middleware(filesystem_scope, interrupt_on, title_model_config) do
+  defp build_middleware(_filesystem_scope, _interrupt_on, title_model_config) do
     [
       Sagents.Middleware.TodoList,
       {ConversationTitle,
@@ -138,19 +141,24 @@ defmodule AgenticRuntime.Agents.Factory do
          chat_model: title_model_config,
          fallbacks: []
        ]},
-      {Sagents.Middleware.FileSystem, [filesystem_scope: filesystem_scope]},
+      # DISABLED (plan: valiant-twirling-crown): FileSystem middleware
+      # {Sagents.Middleware.FileSystem, [filesystem_scope: _filesystem_scope]},
       {Sagents.Middleware.SubAgent,
        [
          block_middleware: [
            Sagents.Middleware.Summarization,
-           Sagents.Middleware.ConversationTitle,
-           Sagents.Middleware.AskUserQuestion
+           Sagents.Middleware.ConversationTitle
+           # DISABLED (plan: valiant-twirling-crown): AskUserQuestion in SubAgent block_middleware
+           # Sagents.Middleware.AskUserQuestion
          ]
        ]},
       Sagents.Middleware.Summarization,
-      Sagents.Middleware.PatchToolCalls,
-      Sagents.Middleware.AskUserQuestion
+      Sagents.Middleware.PatchToolCalls
+      # DISABLED (plan: valiant-twirling-crown): AskUserQuestion middleware
+      # Sagents.Middleware.AskUserQuestion
     ]
-    |> HumanInTheLoop.maybe_append(interrupt_on)
+
+    # DISABLED (plan: valiant-twirling-crown): HumanInTheLoop append
+    # |> HumanInTheLoop.maybe_append(_interrupt_on)
   end
 end
