@@ -10,13 +10,23 @@ defmodule AgenticRuntimeTest do
 
   describe "build_anthropic_model_config/3" do
     test "returns a ChatAnthropic struct with stream + thinking enabled by default" do
-      model = AgenticRuntime.build_anthropic_model_config("claude-opus-4-7", "test-key", [])
+      builder_fn_without_opts = fn model_name, api_key ->
+        AgenticRuntime.build_anthropic_model_config(model_name, api_key)
+      end
 
-      assert %LangChain.ChatModels.ChatAnthropic{} = model
-      assert model.model == "claude-opus-4-7"
-      assert model.api_key == "test-key"
-      assert model.stream == true
-      assert model.thinking == %{type: "enabled"}
+      builder_fn_with_empty_opts = fn model_name, api_key ->
+        AgenticRuntime.build_anthropic_model_config(model_name, api_key, [])
+      end
+
+      for builder_fn <- [builder_fn_without_opts, builder_fn_with_empty_opts] do
+        model = builder_fn.("claude-opus-4-7", "test-key")
+
+        assert %LangChain.ChatModels.ChatAnthropic{} = model
+        assert model.model == "claude-opus-4-7"
+        assert model.api_key == "test-key"
+        assert model.stream == true
+        assert model.thinking == %{type: "enabled"}
+      end
     end
 
     test "respects :thinking opt override" do
