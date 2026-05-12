@@ -53,6 +53,7 @@ defmodule AgenticRuntime.Agents.Factory do
     agent_id = Keyword.fetch!(opts, :agent_id)
     main_model_config = Keyword.fetch!(opts, :model_config)
     base_system_prompt = Keyword.fetch!(opts, :base_system_prompt)
+
     # DISABLED (plan: valiant-twirling-crown): FileSystem middleware removed; opt accepted-but-ignored
     filesystem_scope = Keyword.get(opts, :filesystem_scope, nil)
     title_model_config = Keyword.get(opts, :title_model_config, main_model_config)

@@ -19,7 +19,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
 
   Helpers for translating agent PubSub events into socket-assign updates:
 
-  - Status change handlers (running, idle, cancelled, interrupted, error)
+  - Status change handlers (running, idle, cancelled, error) — `:interrupted` DISABLED (plan: valiant-twirling-crown)
   - Message handlers (LLM deltas, message complete, display messages)
   - Tool execution handlers (identified, executing, completed)
   - Lifecycle handlers (title generated, agent shutdown)
@@ -56,12 +56,12 @@ defmodule AgenticRuntime.IntegrationHelpers do
   - `:has_messages` - false
   - `:streaming_delta` - nil
   - `:loading` - false
-  - `:pending_tools` - []
-  - `:pending_question` - nil
-  - `:remaining_questions` - []
-  - `:question_responses` - []
-  - `:interrupt_data` - nil
-  - `:hitl_decisions` - []
+  - `:pending_tools` - [] (DISABLED — plan: valiant-twirling-crown)
+  - `:pending_question` - nil (DISABLED — plan: valiant-twirling-crown)
+  - `:remaining_questions` - [] (DISABLED — plan: valiant-twirling-crown)
+  - `:question_responses` - [] (DISABLED — plan: valiant-twirling-crown)
+  - `:interrupt_data` - nil (DISABLED — plan: valiant-twirling-crown)
+  - `:hitl_decisions` - [] (DISABLED — plan: valiant-twirling-crown)
   - `:messages` - []
   """
   def init_agent_state(socket) do
@@ -74,12 +74,13 @@ defmodule AgenticRuntime.IntegrationHelpers do
     |> assign(:has_messages, false)
     |> assign(:streaming_delta, nil)
     |> assign(:loading, false)
-    |> assign(:pending_tools, [])
-    |> assign(:pending_question, nil)
-    |> assign(:remaining_questions, [])
-    |> assign(:question_responses, [])
-    |> assign(:interrupt_data, nil)
-    |> assign(:hitl_decisions, [])
+    # DISABLED (plan: valiant-twirling-crown): assigns dead after middleware removal
+    # |> assign(:pending_tools, [])
+    # |> assign(:pending_question, nil)
+    # |> assign(:remaining_questions, [])
+    # |> assign(:question_responses, [])
+    # |> assign(:interrupt_data, nil)
+    # |> assign(:hitl_decisions, [])
     |> assign(:messages, [])
   end
 
@@ -132,14 +133,16 @@ defmodule AgenticRuntime.IntegrationHelpers do
         |> assign(:messages, display_messages)
         |> assign(:has_messages, has_messages)
 
-      # Restore HITL state if agent is interrupted (e.g. after channel reconnect)
-      socket =
-        if agent_status == :interrupted do
-          info = ServerAdapter.impl().get_info(agent_id)
-          handle_status_interrupted(socket, info.interrupt_data)
-        else
-          socket
-        end
+      # DISABLED (plan: valiant-twirling-crown): no middleware can fire :interrupted
+      # after FileSystem + HITL + AskUserQuestion removal; restore branch is dead.
+      # # Restore HITL state if agent is interrupted (e.g. after channel reconnect)
+      # socket =
+      #   if agent_status == :interrupted do
+      #     info = ServerAdapter.impl().get_info(agent_id)
+      #     handle_status_interrupted(socket, info.interrupt_data)
+      #   else
+      #     socket
+      #   end
 
       {:ok, socket}
     rescue
@@ -237,19 +240,22 @@ defmodule AgenticRuntime.IntegrationHelpers do
     |> assign(:last_error_message, error_text)
   end
 
-  @doc """
-  Handles agent status change to :interrupted.
-
-  DISABLED (plan: valiant-twirling-crown): with FileSystem + HITL + AskUserQuestion
-  middleware all removed from the stack, no middleware can fire `:interrupted`.
-  Stubbed to just record the status; no interrupt-type dispatch.
-  """
-  def handle_status_interrupted(socket, interrupt_data) do
-    socket
-    |> assign(:loading, false)
-    |> assign(:agent_status, :interrupted)
-    |> assign(:interrupt_data, interrupt_data)
-  end
+  # DISABLED (plan: valiant-twirling-crown): no middleware can fire :interrupted
+  # after FileSystem + HITL + AskUserQuestion removal. Function fully commented;
+  # only caller (load_conversation/3 interrupt branch) is also commented.
+  # @doc """
+  # Handles agent status change to :interrupted.
+  #
+  # DISABLED (plan: valiant-twirling-crown): with FileSystem + HITL + AskUserQuestion
+  # middleware all removed from the stack, no middleware can fire `:interrupted`.
+  # Stubbed to just record the status; no interrupt-type dispatch.
+  # """
+  # def handle_status_interrupted(socket, interrupt_data) do
+  #   socket
+  #   |> assign(:loading, false)
+  #   |> assign(:agent_status, :interrupted)
+  #   |> assign(:interrupt_data, interrupt_data)
+  # end
 
   # DISABLED (plan: valiant-twirling-crown): interrupt-type dispatch helpers
   # defp apply_interrupt_assigns(socket, %{type: :ask_user_question} = question) do

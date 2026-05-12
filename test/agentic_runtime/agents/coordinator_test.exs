@@ -86,7 +86,8 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
       assert {:ok, session} =
                Coordinator.start_conversation_session(conversation.id,
                  scope: scope,
-                 filesystem_scope: {:user, scope.owner_id},
+                 # DISABLED (plan: valiant-twirling-crown): filesystem_scope opt no longer needed
+                 # filesystem_scope: {:user, scope.owner_id},
                  factory_opts: build_factory_opts()
                )
 
@@ -115,7 +116,8 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
       assert {:ok, session} =
                Coordinator.start_conversation_session(conversation.id,
                  scope: scope,
-                 filesystem_scope: {:user, scope.owner_id},
+                 # DISABLED (plan: valiant-twirling-crown): filesystem_scope opt no longer needed
+                 # filesystem_scope: {:user, scope.owner_id},
                  factory_opts: build_factory_opts()
                )
 
@@ -158,7 +160,8 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
       assert {:ok, _} =
                Coordinator.start_conversation_session(conversation.id,
                  scope: scope,
-                 filesystem_scope: {:user, scope.owner_id},
+                 # DISABLED (plan: valiant-twirling-crown): filesystem_scope opt no longer needed
+                 # filesystem_scope: {:user, scope.owner_id},
                  factory_opts: build_factory_opts()
                )
     end
@@ -173,7 +176,8 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
       assert {:error, :boom} =
                Coordinator.start_conversation_session(conversation.id,
                  scope: scope,
-                 filesystem_scope: {:user, scope.owner_id},
+                 # DISABLED (plan: valiant-twirling-crown): filesystem_scope opt no longer needed
+                 # filesystem_scope: {:user, scope.owner_id},
                  factory_opts: build_factory_opts()
                )
     end

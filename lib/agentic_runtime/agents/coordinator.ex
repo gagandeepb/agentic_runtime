@@ -8,13 +8,14 @@ defmodule AgenticRuntime.Agents.Coordinator do
 
   ## Usage
 
-      # Start or resume a conversation agent. Pass the tenant scope and
-      # filesystem scope from the caller's session.
-      filesystem_scope = {:user, current_scope.user.id}
+      # Start or resume a conversation agent. Pass the tenant scope from the
+      # caller's session.
+      # DISABLED (plan: valiant-twirling-crown): :filesystem_scope removed from example
+      # filesystem_scope = {:user, current_scope.user.id}
       {:ok, session} = AgenticRuntime.Agents.Coordinator.start_conversation_session(
         conversation_id,
         scope: current_scope,
-        filesystem_scope: filesystem_scope,
+        # filesystem_scope: filesystem_scope,  # DISABLED
         factory_opts: [
           model_config: model_config,
           base_system_prompt: prompt,
@@ -75,10 +76,10 @@ defmodule AgenticRuntime.Agents.Coordinator do
   - `{:error, reason}` — Failed to start
   """
   def start_conversation_session(conversation_id, opts \\ []) do
-    # DISABLED (plan: valiant-twirling-crown): :filesystem_scope is now optional;
-    # FileSystem middleware is commented out in factory. Opt is forwarded but ignored.
-    filesystem_scope = Keyword.get(opts, :filesystem_scope)
-
+    # DISABLED (plan: valiant-twirling-crown): :filesystem_scope binding + propagation
+    # commented; FileSystem middleware removed from factory. Opt accepted-but-ignored.
+    # filesystem_scope = Keyword.get(opts, :filesystem_scope)
+    #
     # case Keyword.fetch(opts, :filesystem_scope) do
     #   {:ok, scope_value} ->
     #     scope_value
@@ -100,7 +101,9 @@ defmodule AgenticRuntime.Agents.Coordinator do
 
     case ServerAdapter.impl().get_pid(agent_id) do
       nil ->
-        do_start_session(conversation_id, agent_id, filesystem_scope, opts)
+        # DISABLED (plan: valiant-twirling-crown): pass nil instead of filesystem_scope
+        # do_start_session(conversation_id, agent_id, filesystem_scope, opts)
+        do_start_session(conversation_id, agent_id, nil, opts)
 
       pid ->
         Logger.debug("Agent session already running for conversation #{conversation_id}")
@@ -218,10 +221,13 @@ defmodule AgenticRuntime.Agents.Coordinator do
 
   defp presence_topic(conversation_id), do: "conversation:#{conversation_id}"
 
-  defp do_start_session(conversation_id, agent_id, filesystem_scope, opts) do
-    Logger.info(
-      "Starting agent session for conversation #{conversation_id} with filesystem_scope #{inspect(filesystem_scope)}"
-    )
+  # DISABLED (plan: valiant-twirling-crown): _filesystem_scope param ignored;
+  # log line dropped its filesystem_scope fragment; Keyword.put for :filesystem_scope removed.
+  defp do_start_session(conversation_id, agent_id, _filesystem_scope, opts) do
+    Logger.info("Starting agent session for conversation #{conversation_id}")
+    # Logger.info(
+    #   "Starting agent session for conversation #{conversation_id} with filesystem_scope #{inspect(filesystem_scope)}"
+    # )
 
     factory_opts = Keyword.get(opts, :factory_opts, [])
     scope = Keyword.get(opts, :scope)
@@ -232,7 +238,8 @@ defmodule AgenticRuntime.Agents.Coordinator do
     merged_factory_opts =
       factory_opts
       |> Keyword.put(:agent_id, agent_id)
-      |> Keyword.put(:filesystem_scope, filesystem_scope)
+      # DISABLED (plan: valiant-twirling-crown): no longer propagate :filesystem_scope to factory
+      # |> Keyword.put(:filesystem_scope, filesystem_scope)
       |> Keyword.put(:scope, scope)
       |> Keyword.put(:tool_context, tool_context)
 
