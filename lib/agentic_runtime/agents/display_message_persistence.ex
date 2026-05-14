@@ -42,24 +42,28 @@ defmodule AgenticRuntime.Agents.DisplayMessagePersistence do
           {:ok, display_msg} ->
             {:cont, {:ok, acc ++ [display_msg]}}
 
-          {:error, %Ecto.Changeset{errors: errors} = changeset} ->
-            # Tolerate the unique-tool-call-per-conversation constraint:
-            # a duplicate insert means the tool call was already persisted (e.g.,
-            # the agent restarted mid-stream and re-emitted the same call_id),
-            # so we skip it and keep going.
-            if duplicate_tool_call?(attrs, errors) do
-              Logger.warning(
-                "Skipping duplicate tool call: call_id=#{attrs["content"]["call_id"]}, name=#{attrs["content"]["name"]}"
-              )
+          # It can happen that a display item that a tool call display item is attempted to be inserted multiple times
+          # (e.g., due to agent restarts and re-emission of the same tool call)
+          # further verification is needed that halting the reduction is the right choice here
 
-              {:cont, {:ok, acc}}
-            else
-              Logger.error(
-                "Failed to persist DisplayMessage (#{attrs["content_type"]}): #{inspect(changeset)}"
-              )
+          # {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+          #   # Tolerate the unique-tool-call-per-conversation constraint:
+          #   # a duplicate insert means the tool call was already persisted (e.g.,
+          #   # the agent restarted mid-stream and re-emitted the same call_id),
+          #   # so we skip it and keep going.
+          #   if duplicate_tool_call?(attrs, errors) do
+          #     Logger.warning(
+          #       "Skipping duplicate tool call: call_id=#{attrs["content"]["call_id"]}, name=#{attrs["content"]["name"]}"
+          #     )
 
-              {:halt, {:error, changeset}}
-            end
+          #     {:cont, {:ok, acc}}
+          #   else
+          #     Logger.error(
+          #       "Failed to persist DisplayMessage (#{attrs["content_type"]}): #{inspect(changeset)}"
+          #     )
+
+          #     {:halt, {:error, changeset}}
+          #   end
 
           {:error, reason} ->
             Logger.error(
@@ -116,13 +120,13 @@ defmodule AgenticRuntime.Agents.DisplayMessagePersistence do
     Conversations.resolve_interrupted_tool_result(scope, tool_call_id, result_content)
   end
 
-  defp duplicate_tool_call?(%{"content_type" => "tool_call"}, errors) do
-    Enum.any?(errors, fn {field, {msg, opts}} ->
-      field == :conversation_id &&
-        msg == "tool call already exists for this conversation" &&
-        Keyword.get(opts, :constraint) == :unique
-    end)
-  end
+  # defp duplicate_tool_call?(%{"content_type" => "tool_call"}, errors) do
+  #   Enum.any?(errors, fn {field, {msg, opts}} ->
+  #     field == :conversation_id &&
+  #       msg == "tool call already exists for this conversation" &&
+  #       Keyword.get(opts, :constraint) == :unique
+  #   end)
+  # end
 
-  defp duplicate_tool_call?(_attrs, _errors), do: false
+  # defp duplicate_tool_call?(_attrs, _errors), do: false
 end

@@ -22,10 +22,7 @@ defmodule AgenticRuntime.Agents.ServerAdapter do
   def get_info(agent_id), do: impl().get_info(agent_id)
   def resume(agent_id, resume_data), do: impl().resume(agent_id, resume_data)
 
-  defp impl,
-    do:
-      Application.get_env(:agentic_runtime, :server_adapter, __MODULE__.Sagents)
-      |> IO.inspect(label: "resolved impl")
+  defp impl, do: Application.get_env(:agentic_runtime, :server_adapter, __MODULE__.Sagents)
 end
 
 defmodule AgenticRuntime.Agents.ServerAdapter.Sagents do
