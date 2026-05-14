@@ -201,38 +201,42 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
     end
   end
 
-  describe "Presence helpers" do
-    test "track_conversation_viewer + list_conversation_viewers" do
-      conv_id = Ecto.UUID.generate()
-
-      {:ok, _ref} = Coordinator.track_conversation_viewer(conv_id, "viewer-1", %{name: "Alice"})
-
-      viewers = Coordinator.list_conversation_viewers(conv_id)
-      assert Map.has_key?(viewers, "viewer-1")
-    end
-
-    test "untrack_conversation_viewer removes the viewer" do
-      conv_id = Ecto.UUID.generate()
-
-      {:ok, _ref} = Coordinator.track_conversation_viewer(conv_id, "viewer-2")
-      :ok = Coordinator.untrack_conversation_viewer(conv_id, "viewer-2")
-
-      refute Map.has_key?(Coordinator.list_conversation_viewers(conv_id), "viewer-2")
-    end
-
-    test "metadata stamped on the tracked entry includes joined_at and caller fields" do
-      conv_id = Ecto.UUID.generate()
-
-      {:ok, _ref} =
-        Coordinator.track_conversation_viewer(conv_id, "viewer-meta", %{name: "Bob"})
-
-      %{"viewer-meta" => %{metas: [meta | _]}} =
-        Coordinator.list_conversation_viewers(conv_id)
-
-      assert meta.name == "Bob"
-      assert is_integer(meta.joined_at)
-    end
-  end
+  # DISABLED (plan: presence-shutdown-removal): Coordinator.track/untrack/list
+  # presence helpers are commented out in lib/agentic_runtime/agents/coordinator.ex.
+  # Restore these tests when those helpers are reinstated.
+  #
+  # describe "Presence helpers" do
+  #   test "track_conversation_viewer + list_conversation_viewers" do
+  #     conv_id = Ecto.UUID.generate()
+  #
+  #     {:ok, _ref} = Coordinator.track_conversation_viewer(conv_id, "viewer-1", %{name: "Alice"})
+  #
+  #     viewers = Coordinator.list_conversation_viewers(conv_id)
+  #     assert Map.has_key?(viewers, "viewer-1")
+  #   end
+  #
+  #   test "untrack_conversation_viewer removes the viewer" do
+  #     conv_id = Ecto.UUID.generate()
+  #
+  #     {:ok, _ref} = Coordinator.track_conversation_viewer(conv_id, "viewer-2")
+  #     :ok = Coordinator.untrack_conversation_viewer(conv_id, "viewer-2")
+  #
+  #     refute Map.has_key?(Coordinator.list_conversation_viewers(conv_id), "viewer-2")
+  #   end
+  #
+  #   test "metadata stamped on the tracked entry includes joined_at and caller fields" do
+  #     conv_id = Ecto.UUID.generate()
+  #
+  #     {:ok, _ref} =
+  #       Coordinator.track_conversation_viewer(conv_id, "viewer-meta", %{name: "Bob"})
+  #
+  #     %{"viewer-meta" => %{metas: [meta | _]}} =
+  #       Coordinator.list_conversation_viewers(conv_id)
+  #
+  #     assert meta.name == "Bob"
+  #     assert is_integer(meta.joined_at)
+  #   end
+  # end
 
   describe "subscribe_to_conversation/1" do
     test "raw subscribe receives broadcasts on the agent topic" do
@@ -259,8 +263,11 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
       assert Coordinator.pubsub_name() == AgenticRuntime.TestPubSub
     end
 
-    test "presence_module/0 returns the value configured under :agentic_runtime" do
-      assert Coordinator.presence_module() == AgenticRuntime.TestPresence
-    end
+    # DISABLED (plan: presence-shutdown-removal): Coordinator.presence_module/0
+    # commented out alongside the rest of the presence helpers.
+    #
+    # test "presence_module/0 returns the value configured under :agentic_runtime" do
+    #   assert Coordinator.presence_module() == AgenticRuntime.TestPresence
+    # end
   end
 end

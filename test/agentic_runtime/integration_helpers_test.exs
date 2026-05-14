@@ -414,34 +414,38 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
       assert_receive {:agent_event, "ping"}, 500
     end
 
-    test "tracks the viewer in Presence when :user_id is given" do
-      %{owner_id: owner_id} = scope = build(:scope)
-      conversation = insert(:conversation, user_id: owner_id)
-      viewer_id = "viewer-#{owner_id}"
-      expect(ServerAdapter.Mock, :get_status, fn _ -> :idle end)
-
-      {:ok, _} =
-        IntegrationHelpers.load_conversation(socket(), conversation.id,
-          scope: scope,
-          user_id: viewer_id
-        )
-
-      assert Map.has_key?(
-               Coordinator.list_conversation_viewers(conversation.id),
-               viewer_id
-             )
-    end
-
-    test "skips presence tracking when :user_id is omitted" do
-      %{owner_id: owner_id} = scope = build(:scope)
-      conversation = insert(:conversation, user_id: owner_id)
-      expect(ServerAdapter.Mock, :get_status, fn _ -> :idle end)
-
-      {:ok, _} =
-        IntegrationHelpers.load_conversation(socket(), conversation.id, scope: scope)
-
-      assert Coordinator.list_conversation_viewers(conversation.id) == %{}
-    end
+    # DISABLED (plan: presence-shutdown-removal): :user_id opt is no longer consumed
+    # by load_conversation/3 (presence-based shutdown removed). Restore alongside
+    # the lib's track_conversation_viewer/3 helper.
+    #
+    # test "tracks the viewer in Presence when :user_id is given" do
+    #   %{owner_id: owner_id} = scope = build(:scope)
+    #   conversation = insert(:conversation, user_id: owner_id)
+    #   viewer_id = "viewer-#{owner_id}"
+    #   expect(ServerAdapter.Mock, :get_status, fn _ -> :idle end)
+    #
+    #   {:ok, _} =
+    #     IntegrationHelpers.load_conversation(socket(), conversation.id,
+    #       scope: scope,
+    #       user_id: viewer_id
+    #     )
+    #
+    #   assert Map.has_key?(
+    #            Coordinator.list_conversation_viewers(conversation.id),
+    #            viewer_id
+    #          )
+    # end
+    #
+    # test "skips presence tracking when :user_id is omitted" do
+    #   %{owner_id: owner_id} = scope = build(:scope)
+    #   conversation = insert(:conversation, user_id: owner_id)
+    #   expect(ServerAdapter.Mock, :get_status, fn _ -> :idle end)
+    #
+    #   {:ok, _} =
+    #     IntegrationHelpers.load_conversation(socket(), conversation.id, scope: scope)
+    #
+    #   assert Coordinator.list_conversation_viewers(conversation.id) == %{}
+    # end
 
     test "unsubscribes from the previous conversation before subscribing to the new one" do
       %{owner_id: owner_id} = scope = build(:scope)

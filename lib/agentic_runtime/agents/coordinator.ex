@@ -34,11 +34,14 @@ defmodule AgenticRuntime.Agents.Coordinator do
 
   ## Configuration
 
-  Two host-app modules are resolved at runtime via `Application.get_env`:
+  The PubSub server is resolved at runtime via `Application.get_env`:
 
       config :agentic_runtime,
-        pubsub_name: MyApp.PubSub,
-        presence_module: MyAppWeb.Presence
+        pubsub_name: MyApp.PubSub
+
+  # DISABLED (plan: presence-shutdown-removal): :presence_module config no longer
+  # consumed by the coordinator; presence-based shutdown is off — agents stop on
+  # `inactivity_timeout` only. See `track_conversation_viewer/3` etc below.
   """
 
   alias AgenticRuntime.Agents.ServerAdapter
@@ -177,27 +180,32 @@ defmodule AgenticRuntime.Agents.Coordinator do
     Sagents.PubSub.unsubscribe(@pubsub_module, pubsub_name(), topic)
   end
 
-  @doc """
-  Track a viewer's presence in a conversation. Phoenix.Presence cleans up
-  automatically when the tracked process terminates.
-  """
-  def track_conversation_viewer(conversation_id, viewer_id, metadata \\ %{}) do
-    topic = presence_topic(conversation_id)
-    full_metadata = Map.merge(%{joined_at: System.system_time(:second)}, metadata)
-    Sagents.Presence.track(presence_module(), topic, viewer_id, full_metadata)
-  end
-
-  @doc "Untrack a viewer's presence from a conversation."
-  def untrack_conversation_viewer(conversation_id, viewer_id) do
-    topic = presence_topic(conversation_id)
-    Sagents.Presence.untrack(presence_module(), topic, viewer_id)
-  end
-
-  @doc "List all viewers currently present in a conversation."
-  def list_conversation_viewers(conversation_id) do
-    topic = presence_topic(conversation_id)
-    Sagents.Presence.list(presence_module(), topic)
-  end
+  # DISABLED (plan: presence-shutdown-removal): presence helpers commented out.
+  # Presence-based agent shutdown was removed in favor of `inactivity_timeout`-only.
+  # No callers remain in agentic_runtime or Trento. Restore by uncommenting and
+  # re-adding `presence_tracking` to `supervisor_config` in `do_start_session/4`.
+  #
+  # @doc """
+  # Track a viewer's presence in a conversation. Phoenix.Presence cleans up
+  # automatically when the tracked process terminates.
+  # """
+  # def track_conversation_viewer(conversation_id, viewer_id, metadata \\ %{}) do
+  #   topic = presence_topic(conversation_id)
+  #   full_metadata = Map.merge(%{joined_at: System.system_time(:second)}, metadata)
+  #   Sagents.Presence.track(presence_module(), topic, viewer_id, full_metadata)
+  # end
+  #
+  # @doc "Untrack a viewer's presence from a conversation."
+  # def untrack_conversation_viewer(conversation_id, viewer_id) do
+  #   topic = presence_topic(conversation_id)
+  #   Sagents.Presence.untrack(presence_module(), topic, viewer_id)
+  # end
+  #
+  # @doc "List all viewers currently present in a conversation."
+  # def list_conversation_viewers(conversation_id) do
+  #   topic = presence_topic(conversation_id)
+  #   Sagents.Presence.list(presence_module(), topic)
+  # end
 
   @doc "Get the PubSub topic for a conversation's agent."
   def conversation_topic(conversation_id) do
@@ -210,16 +218,21 @@ defmodule AgenticRuntime.Agents.Coordinator do
     Application.get_env(:agentic_runtime, :pubsub_name)
   end
 
-  @doc "Get the Presence module from application config."
-  def presence_module do
-    Application.get_env(:agentic_runtime, :presence_module)
-  end
+  # DISABLED (plan: presence-shutdown-removal): presence_module/0 unused after
+  # presence helpers were commented out.
+  #
+  # @doc "Get the Presence module from application config."
+  # def presence_module do
+  #   Application.get_env(:agentic_runtime, :presence_module)
+  # end
 
   # Private Functions
 
   defp agent_topic(agent_id), do: "agent_server:#{agent_id}"
 
-  defp presence_topic(conversation_id), do: "conversation:#{conversation_id}"
+  # DISABLED (plan: presence-shutdown-removal): only callsites were the now-commented
+  # presence helpers above.
+  # defp presence_topic(conversation_id), do: "conversation:#{conversation_id}"
 
   # DISABLED (plan: valiant-twirling-crown): _filesystem_scope param ignored;
   # log line dropped its filesystem_scope fragment; Keyword.put for :filesystem_scope removed.
@@ -253,11 +266,16 @@ defmodule AgenticRuntime.Agents.Coordinator do
 
     supervisor_name = AgentSupervisor.get_name(agent_id)
 
-    presence_tracking = [
-      enabled: true,
-      presence_module: presence_module(),
-      topic: presence_topic(conversation_id)
-    ]
+    # DISABLED (plan: presence-shutdown-removal): presence_tracking + presence_module
+    # opts dropped from supervisor_config. Sagents.AgentServer treats absent
+    # presence_config as nil and short-circuits maybe_shutdown_if_no_viewers/1, so
+    # only the inactivity_timeout above can stop the agent.
+    #
+    # presence_tracking = [
+    #   enabled: true,
+    #   presence_module: presence_module(),
+    #   topic: presence_topic(conversation_id)
+    # ]
 
     supervisor_config = [
       agent_id: agent_id,
@@ -267,8 +285,9 @@ defmodule AgenticRuntime.Agents.Coordinator do
       pubsub: {@pubsub_module, pubsub_name()},
       debug_pubsub: {@pubsub_module, pubsub_name()},
       inactivity_timeout: inactivity_timeout,
-      presence_tracking: presence_tracking,
-      presence_module: presence_module(),
+      # DISABLED (plan: presence-shutdown-removal):
+      # presence_tracking: presence_tracking,
+      # presence_module: presence_module(),
       conversation_id: conversation_id,
       agent_persistence: AgenticRuntime.Agents.AgentPersistence,
       display_message_persistence: AgenticRuntime.Agents.DisplayMessagePersistence

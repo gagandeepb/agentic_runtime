@@ -106,7 +106,10 @@ defmodule AgenticRuntime.IntegrationHelpers do
   """
   def load_conversation(socket, conversation_id, opts) do
     scope = Keyword.fetch!(opts, :scope)
-    user_id = Keyword.get(opts, :user_id)
+    # DISABLED (plan: presence-shutdown-removal): :user_id no longer consumed —
+    # presence-based shutdown was removed. Accepted-but-ignored for callers that
+    # haven't been updated yet.
+    _user_id = Keyword.get(opts, :user_id)
     conversations = Keyword.get(opts, :conversations_module, Conversations)
 
     try do
@@ -115,7 +118,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
       conversation = conversations.get_conversation!(scope, conversation_id)
       agent_id = Coordinator.conversation_agent_id(conversation_id)
 
-      socket = subscribe_and_track(socket, conversation_id, user_id)
+      socket = subscribe_and_track(socket, conversation_id)
 
       display_messages = conversations.load_display_messages(scope, conversation_id)
       has_messages = !Enum.empty?(display_messages)
@@ -175,23 +178,25 @@ defmodule AgenticRuntime.IntegrationHelpers do
     socket
   end
 
-  defp subscribe_and_track(socket, conversation_id, user_id) do
+  defp subscribe_and_track(socket, conversation_id, _user_id \\ nil) do
     :ok = Coordinator.ensure_subscribed_to_conversation(conversation_id)
 
-    if user_id do
-      case Coordinator.track_conversation_viewer(conversation_id, user_id) do
-        {:ok, _ref} ->
-          :ok
-
-        {:error, {:already_tracked, _, _, _}} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning("Failed to track presence: #{inspect(reason)}")
-          :ok
-      end
-    end
-
+    # DISABLED (plan: presence-shutdown-removal): track_conversation_viewer call
+    # removed — presence-based shutdown is off. Restore by re-adding the track call
+    # and threading user_id back through load_conversation/3.
+    #   if user_id do
+    #     case Coordinator.track_conversation_viewer(conversation_id, user_id) do
+    #       {:ok, _ref} ->
+    #         :ok
+    #
+    #       {:error, {:already_tracked, _, _, _}} ->
+    #         :ok
+    #
+    #       {:error, reason} ->
+    #         Logger.warning("Failed to track presence: #{inspect(reason)}")
+    #         :ok
+    #     end
+    #   end
     socket
   end
 
