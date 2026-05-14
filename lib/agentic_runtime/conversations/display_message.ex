@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: SUSE LLC
+# SPDX-License-Identifier: Apache-2.0
+
 defmodule AgenticRuntime.Conversations.DisplayMessage do
   @moduledoc """
   Schema for display messages with multi-content type support.

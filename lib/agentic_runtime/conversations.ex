@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: SUSE LLC
+# SPDX-License-Identifier: Apache-2.0
+
 defmodule AgenticRuntime.Conversations do
   @moduledoc """
   Context for conversation persistence with multi-content type support.

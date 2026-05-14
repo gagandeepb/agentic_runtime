@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: SUSE LLC
+# SPDX-License-Identifier: Apache-2.0
+
 defmodule AgenticRuntime.Agents.DisplayMessagePersistence do
   @moduledoc """
   Implements `Sagents.DisplayMessagePersistence` for display messages.
