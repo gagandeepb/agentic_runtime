@@ -3,6 +3,7 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
 
   import Mox
 
+  alias AgenticRuntime.Agents.Coordinator
   alias AgenticRuntime.Agents.ServerAdapter
   alias AgenticRuntime.IntegrationHelpers
 
@@ -343,6 +344,25 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
       assert result.assigns.streaming_delta == nil
       assert result.assigns.messages == []
     end
+
+    test "unsubscribes the calling process from the agent topic" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
+      expect(ServerAdapter.Mock, :get_status, fn _ -> :idle end)
+
+      {:ok, sock} =
+        IntegrationHelpers.load_conversation(socket(), conversation.id, scope: scope)
+
+      _ = IntegrationHelpers.reset_conversation(sock)
+
+      Phoenix.PubSub.broadcast(
+        AgenticRuntime.TestPubSub,
+        Coordinator.conversation_topic(conversation.id),
+        {:after_reset, "x"}
+      )
+
+      refute_receive {:after_reset, _}, 100
+    end
   end
 
   describe "load_conversation/3" do
@@ -375,6 +395,80 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
       assert result.assigns.agent_status == :idle
       assert result.assigns.has_messages == true
       assert length(result.assigns.messages) == 1
+    end
+
+    test "subscribes the calling process to the conversation's agent topic" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
+      expect(ServerAdapter.Mock, :get_status, fn _ -> :idle end)
+
+      {:ok, _} =
+        IntegrationHelpers.load_conversation(socket(), conversation.id, scope: scope)
+
+      Phoenix.PubSub.broadcast(
+        AgenticRuntime.TestPubSub,
+        Coordinator.conversation_topic(conversation.id),
+        {:agent_event, "ping"}
+      )
+
+      assert_receive {:agent_event, "ping"}, 500
+    end
+
+    test "tracks the viewer in Presence when :user_id is given" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
+      viewer_id = "viewer-#{owner_id}"
+      expect(ServerAdapter.Mock, :get_status, fn _ -> :idle end)
+
+      {:ok, _} =
+        IntegrationHelpers.load_conversation(socket(), conversation.id,
+          scope: scope,
+          user_id: viewer_id
+        )
+
+      assert Map.has_key?(
+               Coordinator.list_conversation_viewers(conversation.id),
+               viewer_id
+             )
+    end
+
+    test "skips presence tracking when :user_id is omitted" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
+      expect(ServerAdapter.Mock, :get_status, fn _ -> :idle end)
+
+      {:ok, _} =
+        IntegrationHelpers.load_conversation(socket(), conversation.id, scope: scope)
+
+      assert Coordinator.list_conversation_viewers(conversation.id) == %{}
+    end
+
+    test "unsubscribes from the previous conversation before subscribing to the new one" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      c1 = insert(:conversation, user_id: owner_id)
+      c2 = insert(:conversation, user_id: owner_id)
+      expect(ServerAdapter.Mock, :get_status, 2, fn _ -> :idle end)
+
+      {:ok, sock} =
+        IntegrationHelpers.load_conversation(socket(), c1.id, scope: scope)
+
+      Phoenix.PubSub.broadcast(
+        AgenticRuntime.TestPubSub,
+        Coordinator.conversation_topic(c1.id),
+        {:c1, "before"}
+      )
+
+      assert_receive {:c1, "before"}, 500
+
+      {:ok, _} = IntegrationHelpers.load_conversation(sock, c2.id, scope: scope)
+
+      Phoenix.PubSub.broadcast(
+        AgenticRuntime.TestPubSub,
+        Coordinator.conversation_topic(c1.id),
+        {:c1, "after"}
+      )
+
+      refute_receive {:c1, "after"}, 100
     end
   end
 
