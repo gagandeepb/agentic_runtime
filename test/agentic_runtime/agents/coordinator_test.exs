@@ -49,7 +49,7 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
       assert {:ok, :not_running} = Coordinator.stop_conversation_session(conv_id)
     end
 
-    test "calls stop on the adapter when running" do
+    test "stops the server when running" do
       conv_id = Ecto.UUID.generate()
       expected_id = "conversation-#{conv_id}"
 
@@ -62,12 +62,12 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
 
   describe "start_conversation_session/2" do
     # DISABLED (plan: valiant-twirling-crown): :filesystem_scope is now optional
-    @tag :skip
-    test "raises ArgumentError when :filesystem_scope is missing" do
-      assert_raise ArgumentError, ~r/filesystem_scope/, fn ->
-        Coordinator.start_conversation_session("conv-1", scope: build(:scope))
-      end
-    end
+    # @tag :skip
+    # test "raises ArgumentError when :filesystem_scope is missing" do
+    #   assert_raise ArgumentError, ~r/filesystem_scope/, fn ->
+    #     Coordinator.start_conversation_session("conv-1", scope: build(:scope))
+    #   end
+    # end
 
     test "returns the existing session when an agent is already running" do
       %{owner_id: owner_id} = scope = build(:scope)
@@ -160,6 +160,7 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
                )
     end
 
+    @tag :capture_log
     test "propagates supervisor errors as {:error, reason}" do
       %{owner_id: owner_id} = scope = build(:scope)
       conversation = insert(:conversation, user_id: owner_id)

@@ -33,19 +33,18 @@ defmodule AgenticRuntime.Agents.FactoryTest do
     end
 
     # DISABLED (plan: valiant-twirling-crown): HumanInTheLoop append removed from factory
-    @tag :skip
-    test "appends HumanInTheLoop when :interrupt_on is provided" do
-      assert {:ok, agent} =
-               Factory.create_agent(
-                 agent_id: "factory-hitl",
-                 model_config: build_model(),
-                 base_system_prompt: "x",
-                 interrupt_on: %{"delete_file" => true}
-               )
+    # test "appends HumanInTheLoop when :interrupt_on is provided" do
+    #   assert {:ok, agent} =
+    #            Factory.create_agent(
+    #              agent_id: "factory-hitl",
+    #              model_config: build_model(),
+    #              base_system_prompt: "x",
+    #              interrupt_on: %{"delete_file" => true}
+    #            )
 
-      modules = Enum.map(agent.middleware, & &1.module)
-      assert Sagents.Middleware.HumanInTheLoop in modules
-    end
+    #   modules = Enum.map(agent.middleware, & &1.module)
+    #   assert Sagents.Middleware.HumanInTheLoop in modules
+    # end
 
     test "does not append HumanInTheLoop when :interrupt_on is nil" do
       assert {:ok, agent} =

@@ -25,6 +25,7 @@ defmodule AgenticRuntime do
 
   See `AgenticRuntime.Agents.Factory.create_agent/1` for the full set of options.
   """
+  # is this actually used? @nelson
   defdelegate create_agent(opts), to: Factory
 
   defdelegate build_new_user_message!(message_text), to: LangChain.Message, as: :new_user!

@@ -60,6 +60,7 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
       assert result.assigns.streaming_delta == nil
     end
 
+    @tag :capture_log
     test "handle_status_error stores formatted error message" do
       reason = %LangChain.LangChainError{message: "rate limited", type: :api_error}
 
@@ -74,58 +75,53 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
 
     # DISABLED (plan: valiant-twirling-crown): handle_status_interrupted is now commented
     # in integration_helpers.ex. Body replaced with placeholder to silence undefined-function
-    # compile warnings; @tag :skip keeps the test inert.
-    @tag :skip
-    test "handle_status_interrupted with ask_user_question presents the question" do
-      assert true
-      # interrupt = %{
-      #   type: :ask_user_question,
-      #   tool_call_id: "q1",
-      #   question: "Pick one"
-      # }
-      #
-      # result =
-      #   socket(%{loading: true})
-      #   |> IntegrationHelpers.handle_status_interrupted(interrupt)
-      #
-      # assert result.assigns.agent_status == :interrupted
-      # assert result.assigns.pending_question == interrupt
-      # assert result.assigns.remaining_questions == []
-      # assert result.assigns.pending_tools == []
-      # assert result.assigns.loading == false
-    end
+    # compile warnings
+    # test "handle_status_interrupted with ask_user_question presents the question" do
+    # interrupt = %{
+    #   type: :ask_user_question,
+    #   tool_call_id: "q1",
+    #   question: "Pick one"
+    # }
+    #
+    # result =
+    #   socket(%{loading: true})
+    #   |> IntegrationHelpers.handle_status_interrupted(interrupt)
+    #
+    # assert result.assigns.agent_status == :interrupted
+    # assert result.assigns.pending_question == interrupt
+    # assert result.assigns.remaining_questions == []
+    # assert result.assigns.pending_tools == []
+    # assert result.assigns.loading == false
+    # end
 
     # DISABLED (plan: valiant-twirling-crown): same — multi-question dispatch removed
-    @tag :skip
-    test "handle_status_interrupted with multi-question interrupt queues remaining" do
-      assert true
-      # q1 = %{type: :ask_user_question, tool_call_id: "q1", question: "first?"}
-      # q2 = %{type: :ask_user_question, tool_call_id: "q2", question: "second?"}
-      # interrupt = %{type: :multiple_interrupts, interrupts: [q1, q2]}
-      #
-      # result =
-      #   socket()
-      #   |> IntegrationHelpers.handle_status_interrupted(interrupt)
-      #
-      # assert result.assigns.pending_question == q1
-      # assert result.assigns.remaining_questions == [q2]
-    end
+    # test "handle_status_interrupted with multi-question interrupt queues remaining" do
+    # q1 = %{type: :ask_user_question, tool_call_id: "q1", question: "first?"}
+    # q2 = %{type: :ask_user_question, tool_call_id: "q2", question: "second?"}
+    # interrupt = %{type: :multiple_interrupts, interrupts: [q1, q2]}
+    #
+    # result =
+    #   socket()
+    #   |> IntegrationHelpers.handle_status_interrupted(interrupt)
+    #
+    # assert result.assigns.pending_question == q1
+    # assert result.assigns.remaining_questions == [q2]
+    # end
 
     # DISABLED (plan: valiant-twirling-crown): HITL pending_tools dispatch removed
-    @tag :skip
-    test "handle_status_interrupted with HITL interrupt presents pending tools" do
-      assert true
-      # interrupt = %{
-      #   action_requests: [%{tool_call_id: "t1", name: "delete"}]
-      # }
-      #
-      # result =
-      #   socket()
-      #   |> IntegrationHelpers.handle_status_interrupted(interrupt)
-      #
-      # assert result.assigns.pending_tools == [%{tool_call_id: "t1", name: "delete"}]
-      # assert result.assigns.pending_question == nil
-    end
+    # @tag :skip
+    # test "handle_status_interrupted with HITL interrupt presents pending tools" do
+    # interrupt = %{
+    #   action_requests: [%{tool_call_id: "t1", name: "delete"}]
+    # }
+    #
+    # result =
+    #   socket()
+    #   |> IntegrationHelpers.handle_status_interrupted(interrupt)
+    #
+    # assert result.assigns.pending_tools == [%{tool_call_id: "t1", name: "delete"}]
+    # assert result.assigns.pending_question == nil
+    # end
   end
 
   describe "LLM streaming + completion" do
@@ -189,161 +185,151 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
 
   # DISABLED (plan: valiant-twirling-crown): HITL middleware removed; handler commented out.
   # Bodies replaced with placeholders to silence undefined-function compile warnings.
-  describe "handle_hitl_decision/3" do
-    @describetag :skip
-    test "errors when no agent is running" do
-      assert true
-      # result =
-      #   socket(%{agent_id: nil, pending_tools: [%{tool_call_id: "x"}]})
-      #   |> IntegrationHelpers.handle_hitl_decision(0, :approve)
-      #
-      # assert {:error, :agent_not_running, _} = result
-    end
+  # describe "handle_hitl_decision/3" do
+  # test "errors when no agent is running" do
+  # result =
+  #   socket(%{agent_id: nil, pending_tools: [%{tool_call_id: "x"}]})
+  #   |> IntegrationHelpers.handle_hitl_decision(0, :approve)
+  #
+  # assert {:error, :agent_not_running, _} = result
+  # end
 
-    test "accumulates decision when more pending tools remain" do
-      assert true
-      # pending = [
-      #   %{tool_call_id: "t1", name: "a"},
-      #   %{tool_call_id: "t2", name: "b"}
-      # ]
-      #
-      # socket =
-      #   socket(%{
-      #     agent_id: "agent-1",
-      #     pending_tools: pending,
-      #     hitl_decisions: [],
-      #     interrupt_data: nil
-      #   })
-      #
-      # assert {:ok, updated} = IntegrationHelpers.handle_hitl_decision(socket, 0, :approve)
-      #
-      # assert length(updated.assigns.pending_tools) == 1
-      # assert updated.assigns.hitl_decisions == [%{type: :approve}]
-    end
+  # test "accumulates decision when more pending tools remain" do
+  # pending = [
+  #   %{tool_call_id: "t1", name: "a"},
+  #   %{tool_call_id: "t2", name: "b"}
+  # ]
+  #
+  # socket =
+  #   socket(%{
+  #     agent_id: "agent-1",
+  #     pending_tools: pending,
+  #     hitl_decisions: [],
+  #     interrupt_data: nil
+  #   })
+  #
+  # assert {:ok, updated} = IntegrationHelpers.handle_hitl_decision(socket, 0, :approve)
+  #
+  # assert length(updated.assigns.pending_tools) == 1
+  # assert updated.assigns.hitl_decisions == [%{type: :approve}]
+  # end
 
-    test "resumes the agent when the last decision arrives" do
-      assert true
-      # pending = [%{tool_call_id: "only", name: "delete"}]
-      #
-      # socket =
-      #   socket(%{
-      #     agent_id: "agent-1",
-      #     pending_tools: pending,
-      #     hitl_decisions: [],
-      #     interrupt_data: %{}
-      #   })
-      #
-      # expect(ServerAdapter.Mock, :resume, fn "agent-1", [%{type: :reject}] -> :ok end)
-      #
-      # assert {:ok, result} = IntegrationHelpers.handle_hitl_decision(socket, 0, :reject)
-      # assert result.assigns.agent_status == :running
-      # assert result.assigns.loading == true
-      # assert result.assigns.pending_tools == []
-      # assert result.assigns.interrupt_data == nil
-      # assert result.assigns.hitl_decisions == []
-    end
+  # test "resumes the agent when the last decision arrives" do
+  # pending = [%{tool_call_id: "only", name: "delete"}]
+  #
+  # socket =
+  #   socket(%{
+  #     agent_id: "agent-1",
+  #     pending_tools: pending,
+  #     hitl_decisions: [],
+  #     interrupt_data: %{}
+  #   })
+  #
+  # expect(ServerAdapter.Mock, :resume, fn "agent-1", [%{type: :reject}] -> :ok end)
+  #
+  # assert {:ok, result} = IntegrationHelpers.handle_hitl_decision(socket, 0, :reject)
+  # assert result.assigns.agent_status == :running
+  # assert result.assigns.loading == true
+  # assert result.assigns.pending_tools == []
+  # assert result.assigns.interrupt_data == nil
+  # assert result.assigns.hitl_decisions == []
+  # end
 
-    test "propagates resume failure as {:error, ...}" do
-      assert true
-      # pending = [%{tool_call_id: "only"}]
-      #
-      # socket =
-      #   socket(%{
-      #     agent_id: "agent-1",
-      #     pending_tools: pending,
-      #     hitl_decisions: [],
-      #     interrupt_data: %{}
-      #   })
-      #
-      # expect(ServerAdapter.Mock, :resume, fn _, _ -> {:error, :boom} end)
-      #
-      # assert {:error, {:resume_failed, :boom}, _} =
-      #          IntegrationHelpers.handle_hitl_decision(socket, 0, :approve)
-    end
-  end
+  # test "propagates resume failure as {:error, ...}" do
+  # pending = [%{tool_call_id: "only"}]
+  #
+  # socket =
+  #   socket(%{
+  #     agent_id: "agent-1",
+  #     pending_tools: pending,
+  #     hitl_decisions: [],
+  #     interrupt_data: %{}
+  #   })
+  #
+  # expect(ServerAdapter.Mock, :resume, fn _, _ -> {:error, :boom} end)
+  #
+  # assert {:error, {:resume_failed, :boom}, _} =
+  #          IntegrationHelpers.handle_hitl_decision(socket, 0, :approve)
+  # end
+  # end
 
   # DISABLED (plan: valiant-twirling-crown): AskUserQuestion middleware removed; handler commented out.
   # Bodies replaced with placeholders to silence undefined-function compile warnings.
-  describe "handle_question_response/2" do
-    @describetag :skip
-    test "errors when no agent is running" do
-      assert true
-      # result =
-      #   socket(%{agent_id: nil, pending_question: %{tool_call_id: "q"}})
-      #   |> IntegrationHelpers.handle_question_response(%{type: :answer, value: "yes"})
-      #
-      # assert {:error, :agent_not_running, _} = result
-    end
+  # describe "handle_question_response/2" do
+  # test "errors when no agent is running" do
+  # result =
+  #   socket(%{agent_id: nil, pending_question: %{tool_call_id: "q"}})
+  #   |> IntegrationHelpers.handle_question_response(%{type: :answer, value: "yes"})
+  #
+  # assert {:error, :agent_not_running, _} = result
+  # end
 
-    test "accumulates answers and presents the next question" do
-      assert true
-      # q1 = %{tool_call_id: "q1", question: "first?"}
-      # q2 = %{tool_call_id: "q2", question: "second?"}
-      #
-      # socket =
-      #   socket(%{
-      #     agent_id: "agent-1",
-      #     pending_question: q1,
-      #     remaining_questions: [q2],
-      #     question_responses: []
-      #   })
-      #
-      # assert {:ok, updated} =
-      #          IntegrationHelpers.handle_question_response(socket, %{type: :answer, value: "yes"})
-      #
-      # assert updated.assigns.pending_question == q2
-      # assert updated.assigns.remaining_questions == []
-      #
-      # assert [%{type: :answer, value: "yes", tool_call_id: "q1"}] =
-      #          updated.assigns.question_responses
-    end
+  # test "accumulates answers and presents the next question" do
+  # q1 = %{tool_call_id: "q1", question: "first?"}
+  # q2 = %{tool_call_id: "q2", question: "second?"}
+  #
+  # socket =
+  #   socket(%{
+  #     agent_id: "agent-1",
+  #     pending_question: q1,
+  #     remaining_questions: [q2],
+  #     question_responses: []
+  #   })
+  #
+  # assert {:ok, updated} =
+  #          IntegrationHelpers.handle_question_response(socket, %{type: :answer, value: "yes"})
+  #
+  # assert updated.assigns.pending_question == q2
+  # assert updated.assigns.remaining_questions == []
+  #
+  # assert [%{type: :answer, value: "yes", tool_call_id: "q1"}] =
+  #          updated.assigns.question_responses
+  # end
 
-    test "resumes with single answer when only one question was asked" do
-      assert true
-      # q1 = %{tool_call_id: "q1", question: "first?"}
-      #
-      # socket =
-      #   socket(%{
-      #     agent_id: "agent-1",
-      #     pending_question: q1,
-      #     remaining_questions: [],
-      #     question_responses: []
-      #   })
-      #
-      # expect(ServerAdapter.Mock, :resume, fn "agent-1", %{type: :answer, tool_call_id: "q1"} ->
-      #   :ok
-      # end)
-      #
-      # assert {:ok, updated} =
-      #          IntegrationHelpers.handle_question_response(socket, %{type: :answer, value: "ok"})
-      #
-      # assert updated.assigns.pending_question == nil
-      # assert updated.assigns.question_responses == []
-      # assert updated.assigns.agent_status == :running
-    end
+  # test "resumes with single answer when only one question was asked" do
+  # q1 = %{tool_call_id: "q1", question: "first?"}
+  #
+  # socket =
+  #   socket(%{
+  #     agent_id: "agent-1",
+  #     pending_question: q1,
+  #     remaining_questions: [],
+  #     question_responses: []
+  #   })
+  #
+  # expect(ServerAdapter.Mock, :resume, fn "agent-1", %{type: :answer, tool_call_id: "q1"} ->
+  #   :ok
+  # end)
+  #
+  # assert {:ok, updated} =
+  #          IntegrationHelpers.handle_question_response(socket, %{type: :answer, value: "ok"})
+  #
+  # assert updated.assigns.pending_question == nil
+  # assert updated.assigns.question_responses == []
+  # assert updated.assigns.agent_status == :running
+  # end
 
-    test "resumes with list of answers for multi-question interrupts" do
-      assert true
-      # q1 = %{tool_call_id: "q1", question: "first?"}
-      #
-      # socket =
-      #   socket(%{
-      #     agent_id: "agent-1",
-      #     pending_question: q1,
-      #     remaining_questions: [],
-      #     question_responses: [%{type: :answer, value: "prev", tool_call_id: "q0"}]
-      #   })
-      #
-      # expect(ServerAdapter.Mock, :resume, fn "agent-1", responses ->
-      #   assert is_list(responses)
-      #   assert length(responses) == 2
-      #   :ok
-      # end)
-      #
-      # assert {:ok, _} =
-      #          IntegrationHelpers.handle_question_response(socket, %{type: :answer, value: "now"})
-    end
-  end
+  # test "resumes with list of answers for multi-question interrupts" do
+  # q1 = %{tool_call_id: "q1", question: "first?"}
+  #
+  # socket =
+  #   socket(%{
+  #     agent_id: "agent-1",
+  #     pending_question: q1,
+  #     remaining_questions: [],
+  #     question_responses: [%{type: :answer, value: "prev", tool_call_id: "q0"}]
+  #   })
+  #
+  # expect(ServerAdapter.Mock, :resume, fn "agent-1", responses ->
+  #   assert is_list(responses)
+  #   assert length(responses) == 2
+  #   :ok
+  # end)
+  #
+  # assert {:ok, _} =
+  #          IntegrationHelpers.handle_question_response(socket, %{type: :answer, value: "now"})
+  # end
+  # end
 
   describe "reset_conversation/1" do
     test "resets all assigns to defaults when no conversation_id is set" do

@@ -22,6 +22,7 @@ defmodule AgenticRuntime.Agents.AgentPersistenceTest do
       assert {:ok, ^state} = AgentPersistence.load_state(scope, ctx)
     end
 
+    @tag :capture_log
     test "skips persistence when scope mismatch" do
       %{owner_id: owner_id} = build(:scope)
       %{id: conversation_id} = insert(:conversation, user_id: owner_id)
@@ -79,6 +80,7 @@ defmodule AgenticRuntime.Agents.AgentPersistenceTest do
                AgentPersistence.load_state(scope, ctx)
     end
 
+    @tag :capture_log
     test "skips persistence when the conversation has been deleted" do
       %{owner_id: owner_id} = scope = build(:scope)
       %{id: conversation_id} = conversation = insert(:conversation, user_id: owner_id)
