@@ -14,7 +14,18 @@ defmodule AgenticRuntime.Agents.ServerAdapter do
   @callback get_info(String.t()) :: map()
   @callback resume(String.t(), term()) :: :ok | {:error, term()}
 
-  def impl, do: Application.get_env(:agentic_runtime, :server_adapter, __MODULE__.Sagents)
+  def add_message(agent_id, message), do: impl().add_message(agent_id, message)
+  def cancel(agent_id), do: impl().cancel(agent_id)
+  def get_pid(agent_id), do: impl().get_pid(agent_id)
+  def stop(agent_id), do: impl().stop(agent_id)
+  def get_status(agent_id), do: impl().get_status(agent_id)
+  def get_info(agent_id), do: impl().get_info(agent_id)
+  def resume(agent_id, resume_data), do: impl().resume(agent_id, resume_data)
+
+  defp impl,
+    do:
+      Application.get_env(:agentic_runtime, :server_adapter, __MODULE__.Sagents)
+      |> IO.inspect(label: "resolved impl")
 end
 
 defmodule AgenticRuntime.Agents.ServerAdapter.Sagents do

@@ -1,15 +1,11 @@
 defmodule AgenticRuntimeTest do
-  use ExUnit.Case, async: true
+  use AgenticRuntime.AgentCase, async: true
 
-  import Mox
+  alias Sagents.Agent
+  alias LangChain.ChatModels.{ChatAnthropic, ChatGoogleAI, ChatOpenAI}
 
-  alias AgenticRuntime.Agents.ServerAdapter
-  alias AgenticRuntime.Agents.SupervisorAdapter
-
-  setup :verify_on_exit!
-
-  describe "build_anthropic_model_config/3" do
-    test "returns a ChatAnthropic struct with stream + thinking enabled by default" do
+  describe "building models" do
+    test "builds ChatAnthropic model with stream + thinking enabled by default" do
       builder_fn_without_opts = fn model_name, api_key ->
         AgenticRuntime.build_anthropic_model_config(model_name, api_key)
       end
@@ -19,45 +15,44 @@ defmodule AgenticRuntimeTest do
       end
 
       for builder_fn <- [builder_fn_without_opts, builder_fn_with_empty_opts] do
-        model = builder_fn.("claude-opus-4-7", "test-key")
-
-        assert %LangChain.ChatModels.ChatAnthropic{} = model
-        assert model.model == "claude-opus-4-7"
-        assert model.api_key == "test-key"
-        assert model.stream == true
-        assert model.thinking == %{type: "enabled"}
+        assert %ChatAnthropic{
+                 model: "claude-opus-4-7",
+                 api_key: "test-key",
+                 stream: true,
+                 thinking: %{type: "enabled"}
+               } = builder_fn.("claude-opus-4-7", "test-key")
       end
     end
 
-    test "respects :thinking opt override" do
+    test "builds ChatAnthropic model with :thinking opt override" do
       model =
         AgenticRuntime.build_anthropic_model_config("claude-opus-4-7", "k",
           thinking: %{type: "disabled"}
         )
 
-      assert model.thinking == %{type: "disabled"}
+      assert %ChatAnthropic{
+               thinking: %{type: "disabled"}
+             } = model
     end
-  end
 
-  describe "build_openai_model_config/2" do
-    test "returns a ChatOpenAI struct with streaming enabled" do
+    test "builds ChatOpenAI model with streaming enabled" do
       model = AgenticRuntime.build_openai_model_config("gpt-5", "test-key")
 
-      assert %LangChain.ChatModels.ChatOpenAI{} = model
-      assert model.model == "gpt-5"
-      assert model.api_key == "test-key"
-      assert model.stream == true
+      assert %ChatOpenAI{
+               model: "gpt-5",
+               api_key: "test-key",
+               stream: true
+             } = model
     end
-  end
 
-  describe "build_googleai_model_config/2" do
-    test "returns a ChatGoogleAI struct with streaming enabled" do
+    test "builds ChatGoogleAI model with streaming enabled" do
       model = AgenticRuntime.build_googleai_model_config("gemini-2.0", "test-key")
 
-      assert %LangChain.ChatModels.ChatGoogleAI{} = model
-      assert model.model == "gemini-2.0"
-      assert model.api_key == "test-key"
-      assert model.stream == true
+      assert %ChatGoogleAI{
+               model: "gemini-2.0",
+               api_key: "test-key",
+               stream: true
+             } = model
     end
   end
 
@@ -68,29 +63,29 @@ defmodule AgenticRuntimeTest do
     end
 
     test "returns {:ok, agent} with the full middleware stack composed", %{model: model} do
-      assert {:ok, agent} =
+      assert {:ok,
+              %Agent{
+                agent_id: agent_id,
+                middleware: middleware
+              }} =
                AgenticRuntime.create_agent(
                  agent_id: "test-agent",
                  model_config: model,
                  base_system_prompt: "You are helpful."
                )
 
-      modules = Enum.map(agent.middleware, & &1.module)
+      assert agent_id == "test-agent"
 
       # DISABLED (plan: valiant-twirling-crown): FileSystem + AskUserQuestion removed from stack
-      for expected <- [
-            Sagents.Middleware.TodoList,
-            Sagents.Middleware.ConversationTitle,
-            # Sagents.Middleware.FileSystem,
-            Sagents.Middleware.SubAgent,
-            Sagents.Middleware.Summarization,
-            Sagents.Middleware.PatchToolCalls
-            # Sagents.Middleware.AskUserQuestion
-          ] do
-        assert expected in modules, "expected #{inspect(expected)} in middleware stack"
-      end
-
-      assert agent.agent_id == "test-agent"
+      assert Enum.map(middleware, & &1.module) == [
+               Sagents.Middleware.TodoList,
+               Sagents.Middleware.ConversationTitle,
+               # Sagents.Middleware.FileSystem,
+               Sagents.Middleware.SubAgent,
+               Sagents.Middleware.Summarization,
+               Sagents.Middleware.PatchToolCalls
+               # Sagents.Middleware.AskUserQuestion
+             ]
     end
 
     test "raises on missing required :agent_id", %{model: model} do
@@ -111,26 +106,77 @@ defmodule AgenticRuntimeTest do
       end
     end
 
-    test "propagates :scope through to the agent struct", %{model: model} do
-      scope = %AgenticRuntime.Factories.Scope{owner_id: 99}
+    test "builds an Agent with the default options", %{model: model} do
+      assert {:ok,
+              %Agent{
+                agent_id: "default-agent",
+                scope: nil,
+                tool_context: %{},
+                fallback_models: [],
+                before_fallback: nil
+              }} =
+               AgenticRuntime.create_agent(
+                 agent_id: "default-agent",
+                 model_config: model,
+                 base_system_prompt: "x"
+               )
+    end
 
-      assert {:ok, agent} =
+    test "builds an Agent with the provided options", %{model: model} do
+      scope = %AgenticRuntime.Factory.Scope{owner_id: 99}
+      tool_context = %{user_id: 99, tenant: "acme"}
+      fallback = AgenticRuntime.build_openai_model_config("gpt-5", "k")
+      before_fallback = fn chain -> chain end
+
+      tool =
+        AgenticRuntime.new_tool!(%{
+          name: "echo",
+          description: "echoes",
+          function: fn _args, _ctx -> {:ok, "ok"} end
+        })
+
+      assert {:ok,
+              %Agent{
+                agent_id: "scoped-agent",
+                scope: ^scope,
+                tool_context: ^tool_context,
+                fallback_models: [^fallback],
+                before_fallback: ^before_fallback,
+                tools: resolved_tools
+              }} =
                AgenticRuntime.create_agent(
                  agent_id: "scoped-agent",
                  model_config: model,
                  base_system_prompt: "x",
-                 scope: scope
+                 scope: scope,
+                 tool_context: tool_context,
+                 tools: [tool],
+                 fallback_models: [fallback],
+                 before_fallback: before_fallback
                )
 
-      assert agent.scope == scope
+      # The Agent's `tools` list also contains middleware-injected tools
+      # (TodoList, SubAgent, …); assert the caller-supplied tool is among them.
+      assert "echo" in Enum.map(resolved_tools, & &1.name)
     end
   end
 
-  describe "build_new_user_message!/1" do
-    test "returns a LangChain.Message with role :user and the supplied text" do
+  describe "delegating to Langchain" do
+    test "build_new_user_message!/1 returns a LangChain.Message with role :user and the supplied text" do
       msg = AgenticRuntime.build_new_user_message!("hello")
       assert %LangChain.Message{role: :user} = msg
       assert [%LangChain.Message.ContentPart{type: :text, content: "hello"}] = msg.content
+    end
+
+    test "new_tool!/1 returns a LangChain.Function with the given name" do
+      tool =
+        AgenticRuntime.new_tool!(%{
+          name: "echo",
+          description: "echoes",
+          function: fn _args, _context -> {:ok, "ok"} end
+        })
+
+      assert %LangChain.Function{name: "echo"} = tool
     end
   end
 
@@ -148,19 +194,6 @@ defmodule AgenticRuntimeTest do
     test "calls ServerAdapter.cancel/1 with the agent_id" do
       expect(ServerAdapter.Mock, :cancel, fn "agent-2" -> :ok end)
       assert :ok = AgenticRuntime.cancel_agent_execution("agent-2")
-    end
-  end
-
-  describe "new_tool!/1" do
-    test "returns a LangChain.Function with the given name" do
-      tool =
-        AgenticRuntime.new_tool!(%{
-          name: "echo",
-          description: "echoes",
-          function: fn _args, _context -> {:ok, "ok"} end
-        })
-
-      assert %LangChain.Function{name: "echo"} = tool
     end
   end
 

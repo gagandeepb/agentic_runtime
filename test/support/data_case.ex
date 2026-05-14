@@ -9,7 +9,7 @@ defmodule AgenticRuntime.DataCase do
       import Ecto.Changeset
       import Ecto.Query
       import AgenticRuntime.DataCase
-      import AgenticRuntime.Factories
+      import AgenticRuntime.Factory
     end
   end
 

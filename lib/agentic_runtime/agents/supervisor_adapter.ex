@@ -11,7 +11,10 @@ defmodule AgenticRuntime.Agents.SupervisorAdapter do
               {:ok, pid()} | {:ok, pid(), :already_started} | {:error, term()}
   @callback child_spec(keyword()) :: Supervisor.child_spec()
 
-  def impl, do: Application.get_env(:agentic_runtime, :supervisor_adapter, __MODULE__.Sagents)
+  def start_agent_sync(opts), do: impl().start_agent_sync(opts)
+  def start_runtime(opts), do: impl().child_spec(opts)
+
+  defp impl, do: Application.get_env(:agentic_runtime, :supervisor_adapter, __MODULE__.Sagents)
 end
 
 defmodule AgenticRuntime.Agents.SupervisorAdapter.Sagents do

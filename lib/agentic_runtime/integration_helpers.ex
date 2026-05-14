@@ -121,7 +121,7 @@ defmodule AgenticRuntime.IntegrationHelpers do
       has_messages = !Enum.empty?(display_messages)
       saved_todos = conversations.load_todos(scope, conversation_id)
 
-      agent_status = ServerAdapter.impl().get_status(agent_id)
+      agent_status = ServerAdapter.get_status(agent_id)
 
       socket =
         socket

@@ -29,12 +29,11 @@ defmodule AgenticRuntime do
 
   defdelegate build_new_user_message!(message_text), to: LangChain.Message, as: :new_user!
 
-  def add_message(agent_id, langchain_message),
-    do: ServerAdapter.impl().add_message(agent_id, langchain_message)
+  defdelegate add_message(agent_id, langchain_message), to: ServerAdapter, as: :add_message
 
-  def cancel_agent_execution(agent_id), do: ServerAdapter.impl().cancel(agent_id)
+  defdelegate cancel_agent_execution(agent_id), to: ServerAdapter, as: :cancel
 
   defdelegate new_tool!(function_schema), to: LangChain.Function, as: :new!
 
-  def start_runtime(opts), do: SupervisorAdapter.impl().child_spec(opts)
+  defdelegate start_runtime(opts), to: SupervisorAdapter, as: :start_runtime
 end

@@ -34,7 +34,8 @@ defmodule AgenticRuntime.MixProject do
       {:ecto_sql, "~> 3.12"},
       {:postgrex, ">= 0.0.0", only: [:dev, :test]},
       {:mox, "~> 1.2", only: :test},
-      {:faker, "~> 0.18", only: :test}
+      {:faker, "~> 0.18", only: :test},
+      {:ex_machina, "~> 2.7", only: :test}
     ]
   end
 end

@@ -7,7 +7,7 @@ defmodule AgenticRuntime.ConversationsTest do
 
   describe "create_conversation/2" do
     test "associates the conversation with the scope's owner" do
-      scope = build_scope()
+      scope = build(:scope)
       attrs = conversation_attrs(%{title: "Hello"})
 
       assert {:ok, %Conversation{} = conversation} =
@@ -26,8 +26,8 @@ defmodule AgenticRuntime.ConversationsTest do
 
   describe "get_conversation/2 + get_conversation!/2" do
     setup do
-      scope = build_scope()
-      conversation = insert_conversation!(scope)
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
       {:ok, scope: scope, conversation: conversation}
     end
 
@@ -39,12 +39,12 @@ defmodule AgenticRuntime.ConversationsTest do
     test "returns {:error, :not_found} when a different scope tries to read it", %{
       conversation: c
     } do
-      other_scope = build_scope()
+      other_scope = build(:scope)
       assert {:error, :not_found} = Conversations.get_conversation(other_scope, c.id)
     end
 
     test "bang variant raises Ecto.NoResultsError when scope mismatch", %{conversation: c} do
-      other_scope = build_scope()
+      other_scope = build(:scope)
 
       assert_raise Ecto.NoResultsError, fn ->
         Conversations.get_conversation!(other_scope, c.id)
@@ -54,12 +54,12 @@ defmodule AgenticRuntime.ConversationsTest do
 
   describe "list_conversations/2" do
     test "only returns conversations owned by the scope" do
-      scope_a = build_scope()
-      scope_b = build_scope()
+      %{owner_id: owner_a} = scope_a = build(:scope)
+      %{owner_id: owner_b} = scope_b = build(:scope)
 
-      _ = insert_conversation!(scope_a, %{title: "A1"})
-      _ = insert_conversation!(scope_a, %{title: "A2"})
-      _ = insert_conversation!(scope_b, %{title: "B1"})
+      _ = insert(:conversation, user_id: owner_a, title: "A1")
+      _ = insert(:conversation, user_id: owner_a, title: "A2")
+      _ = insert(:conversation, user_id: owner_b, title: "B1")
 
       titles_a = scope_a |> Conversations.list_conversations() |> Enum.map(& &1.title)
       titles_b = scope_b |> Conversations.list_conversations() |> Enum.map(& &1.title)
@@ -69,8 +69,8 @@ defmodule AgenticRuntime.ConversationsTest do
     end
 
     test "honours :limit and :offset" do
-      scope = build_scope()
-      for i <- 1..5, do: insert_conversation!(scope, %{title: "C#{i}"})
+      %{owner_id: owner_id} = scope = build(:scope)
+      for i <- 1..5, do: insert(:conversation, user_id: owner_id, title: "C#{i}")
 
       assert length(Conversations.list_conversations(scope, limit: 2)) == 2
       assert length(Conversations.list_conversations(scope, limit: 2, offset: 4)) == 1
@@ -79,8 +79,8 @@ defmodule AgenticRuntime.ConversationsTest do
 
   describe "update_conversation/2 + delete_conversation/{1,2}" do
     setup do
-      scope = build_scope()
-      conversation = insert_conversation!(scope, %{title: "Original"})
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id, title: "Original")
       {:ok, scope: scope, conversation: conversation}
     end
 
@@ -95,7 +95,7 @@ defmodule AgenticRuntime.ConversationsTest do
     end
 
     test "delete_conversation/2 enforces scope", %{conversation: c} do
-      other_scope = build_scope()
+      other_scope = build(:scope)
 
       assert_raise Ecto.NoResultsError, fn ->
         Conversations.delete_conversation(other_scope, c.id)
@@ -107,8 +107,8 @@ defmodule AgenticRuntime.ConversationsTest do
 
   describe "save_agent_state/3 + load_agent_state/2" do
     setup do
-      scope = build_scope()
-      conversation = insert_conversation!(scope)
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
       {:ok, scope: scope, conversation: conversation}
     end
 
@@ -139,7 +139,7 @@ defmodule AgenticRuntime.ConversationsTest do
     end
 
     test "rejects writes from a different scope", %{conversation: c} do
-      other_scope = build_scope()
+      other_scope = build(:scope)
 
       assert {:error, :not_found} =
                Conversations.save_agent_state(other_scope, c.id, %{"version" => 1, "state" => %{}})
@@ -149,7 +149,7 @@ defmodule AgenticRuntime.ConversationsTest do
       :ok =
         elem(Conversations.save_agent_state(scope, c.id, %{"version" => 1, "state" => %{}}), 0)
 
-      other_scope = build_scope()
+      other_scope = build(:scope)
       assert {:error, :not_found} = Conversations.load_agent_state(other_scope, c.id)
     end
 
@@ -163,8 +163,8 @@ defmodule AgenticRuntime.ConversationsTest do
 
   describe "display messages — append_display_message/3 and load_display_messages/3" do
     setup do
-      scope = build_scope()
-      conversation = insert_conversation!(scope)
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
       {:ok, scope: scope, conversation: conversation}
     end
 
@@ -224,19 +224,19 @@ defmodule AgenticRuntime.ConversationsTest do
       {:ok, _} =
         Conversations.append_display_message(scope, c.id, text_message_attrs())
 
-      assert Conversations.load_display_messages(build_scope(), c.id) == []
+      assert Conversations.load_display_messages(build(:scope), c.id) == []
     end
 
     test "append rejects writes from a different scope", %{conversation: c} do
       assert {:error, :not_found} =
-               Conversations.append_display_message(build_scope(), c.id, text_message_attrs())
+               Conversations.append_display_message(build(:scope), c.id, text_message_attrs())
     end
   end
 
   describe "tool call lifecycle" do
     setup do
-      scope = build_scope()
-      conversation = insert_conversation!(scope)
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
       attrs = tool_call_attrs()
 
       {:ok, %DisplayMessage{} = tool_call} =
@@ -294,7 +294,7 @@ defmodule AgenticRuntime.ConversationsTest do
     end
 
     test "wrong-scope callers cannot mutate tool calls", %{call_id: call_id} do
-      other = build_scope()
+      other = build(:scope)
       assert {:error, :not_found} = Conversations.mark_tool_executing(other, call_id)
       assert {:error, :not_found} = Conversations.complete_tool_call(other, call_id, %{})
       assert {:error, :not_found} = Conversations.fail_tool_call(other, call_id, %{})
@@ -304,8 +304,8 @@ defmodule AgenticRuntime.ConversationsTest do
 
   describe "record_hitl_decision/3" do
     setup do
-      scope = build_scope()
-      conversation = insert_conversation!(scope)
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
       attrs = tool_call_attrs()
 
       {:ok, _} =
@@ -321,14 +321,14 @@ defmodule AgenticRuntime.ConversationsTest do
 
     test "rejects scope mismatch", %{call_id: call_id} do
       assert {:error, :not_found} =
-               Conversations.record_hitl_decision(build_scope(), call_id, "rejected")
+               Conversations.record_hitl_decision(build(:scope), call_id, "rejected")
     end
   end
 
   describe "search_messages/2" do
     test "finds messages by content substring within scope" do
-      scope = build_scope()
-      conversation = insert_conversation!(scope)
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
 
       {:ok, _} =
         Conversations.append_display_message(
@@ -350,10 +350,10 @@ defmodule AgenticRuntime.ConversationsTest do
     end
 
     test "does not return messages from another scope" do
-      scope_a = build_scope()
-      scope_b = build_scope()
+      %{owner_id: owner_a} = scope_a = build(:scope)
+      scope_b = build(:scope)
 
-      conversation_a = insert_conversation!(scope_a)
+      conversation_a = insert(:conversation, user_id: owner_a)
 
       {:ok, _} =
         Conversations.append_display_message(
@@ -363,6 +363,178 @@ defmodule AgenticRuntime.ConversationsTest do
         )
 
       assert Conversations.search_messages(scope_b, "secret") == []
+    end
+
+    test "returns [] when no message matches" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
+
+      {:ok, _} =
+        Conversations.append_display_message(
+          scope,
+          conversation.id,
+          text_message_attrs(%{content: %{"text" => "lorem ipsum"}})
+        )
+
+      assert Conversations.search_messages(scope, "nothing-here") == []
+    end
+
+    test "is case-insensitive (ILIKE)" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
+
+      {:ok, _} =
+        Conversations.append_display_message(
+          scope,
+          conversation.id,
+          text_message_attrs(%{content: %{"text" => "Ferrari"}})
+        )
+
+      assert [_] = Conversations.search_messages(scope, "ferrari")
+    end
+
+    test "matches across content_types because the JSONB blob is stringified" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
+
+      {:ok, _} =
+        Conversations.append_display_message(
+          scope,
+          conversation.id,
+          tool_call_attrs(%{
+            content: %{
+              "call_id" => "call_search_1",
+              "name" => "lookup_unicorn",
+              "arguments" => %{"q" => "x"}
+            }
+          })
+        )
+
+      assert [_] = Conversations.search_messages(scope, "lookup_unicorn")
+    end
+  end
+
+  describe "append_text_message/4" do
+    test "creates a text-content display message in the given role" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      c = insert(:conversation, user_id: owner_id)
+
+      assert {:ok, %DisplayMessage{} = msg} =
+               Conversations.append_text_message(scope, c.id, "assistant", "hi there")
+
+      assert msg.message_type == "assistant"
+      assert msg.content_type == "text"
+      assert msg.content == %{"text" => "hi there"}
+    end
+
+    test "rejects scope mismatch" do
+      %{owner_id: owner_id} = build(:scope)
+      c = insert(:conversation, user_id: owner_id)
+
+      assert {:error, :not_found} =
+               Conversations.append_text_message(build(:scope), c.id, "user", "x")
+    end
+  end
+
+  describe "load_todos/2" do
+    test "returns [] when no agent state has been persisted" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      c = insert(:conversation, user_id: owner_id)
+
+      assert Conversations.load_todos(scope, c.id) == []
+    end
+
+    test "returns [] when state has no todos field" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      c = insert(:conversation, user_id: owner_id)
+
+      {:ok, _} =
+        Conversations.save_agent_state(scope, c.id, %{
+          "version" => 1,
+          "state" => %{"messages" => []}
+        })
+
+      assert Conversations.load_todos(scope, c.id) == []
+    end
+
+    test "decodes valid todo maps via Sagents.Todo.from_map/1" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      c = insert(:conversation, user_id: owner_id)
+
+      todo = %{
+        "id" => "todo-1",
+        "content" => "write tests",
+        "status" => "pending",
+        "active_form" => "writing tests"
+      }
+
+      {:ok, _} =
+        Conversations.save_agent_state(scope, c.id, %{
+          "version" => 1,
+          "state" => %{"todos" => [todo]}
+        })
+
+      assert [%Sagents.Todo{content: "write tests"}] = Conversations.load_todos(scope, c.id)
+    end
+
+    test "returns [] when scope cannot read the conversation" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      c = insert(:conversation, user_id: owner_id)
+
+      {:ok, _} =
+        Conversations.save_agent_state(scope, c.id, %{
+          "version" => 1,
+          "state" => %{"todos" => []}
+        })
+
+      assert Conversations.load_todos(build(:scope), c.id) == []
+    end
+  end
+
+  describe "resolve_interrupted_tool_result/3" do
+    setup do
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
+      call_id = "call_#{System.unique_integer([:positive])}"
+
+      # Insert a tool_result row pre-marked as interrupted (the state the agent
+      # leaves it in after the user is asked to approve/reject the call).
+      {:ok, tr_msg} =
+        Conversations.append_display_message(scope, conversation.id, %{
+          message_type: "tool",
+          content_type: "tool_result",
+          content: %{
+            "tool_call_id" => call_id,
+            "name" => "deletion",
+            "content" => "(pending)",
+            "is_interrupt" => true
+          }
+        })
+
+      {:ok, scope: scope, conversation: conversation, call_id: call_id, tr_msg: tr_msg}
+    end
+
+    test "fills in the result and clears is_interrupt", %{
+      scope: scope,
+      call_id: call_id
+    } do
+      assert {:ok, %DisplayMessage{} = updated} =
+               Conversations.resolve_interrupted_tool_result(scope, call_id, "deleted: 4 rows")
+
+      assert updated.content["is_interrupt"] == false
+      assert updated.content["content"] == "deleted: 4 rows"
+    end
+
+    test "returns :not_found when no interrupted tool_result exists for that call_id", %{
+      scope: scope
+    } do
+      assert {:error, :not_found} =
+               Conversations.resolve_interrupted_tool_result(scope, "missing-id", "x")
+    end
+
+    test "rejects scope mismatch", %{call_id: call_id} do
+      assert {:error, :not_found} =
+               Conversations.resolve_interrupted_tool_result(build(:scope), call_id, "x")
     end
   end
 end

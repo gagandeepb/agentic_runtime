@@ -15,8 +15,8 @@ defmodule AgenticRuntime.Agents.DisplayMessagePersistenceTest do
 
   describe "save_message/3" do
     test "persists a user text message as a DisplayMessage row" do
-      scope = build_scope()
-      conv = insert_conversation!(scope)
+      %{owner_id: owner_id} = scope = build(:scope)
+      conv = insert(:conversation, user_id: owner_id)
       msg = %Message{role: :user, content: "hello there"}
 
       assert {:ok, [display]} = DisplayMessagePersistence.save_message(scope, msg, ctx(conv.id))
@@ -26,8 +26,8 @@ defmodule AgenticRuntime.Agents.DisplayMessagePersistenceTest do
     end
 
     test "returns {:ok, []} when the message has no displayable content" do
-      scope = build_scope()
-      conv = insert_conversation!(scope)
+      %{owner_id: owner_id} = scope = build(:scope)
+      conv = insert(:conversation, user_id: owner_id)
       msg = %Message{role: :user, content: ""}
 
       assert {:ok, []} = DisplayMessagePersistence.save_message(scope, msg, ctx(conv.id))
@@ -36,8 +36,8 @@ defmodule AgenticRuntime.Agents.DisplayMessagePersistenceTest do
 
   describe "update_tool_status/4" do
     setup do
-      scope = build_scope()
-      conv = insert_conversation!(scope)
+      %{owner_id: owner_id} = scope = build(:scope)
+      conv = insert(:conversation, user_id: owner_id)
 
       attrs = tool_call_attrs()
       {:ok, _} = Conversations.append_display_message(scope, conv.id, attrs)
@@ -128,6 +128,115 @@ defmodule AgenticRuntime.Agents.DisplayMessagePersistenceTest do
                )
 
       assert msg.status == "cancelled"
+    end
+
+    test "returns {:error, :not_found} when call_id has no matching message" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      conv = insert(:conversation, user_id: owner_id)
+
+      assert {:error, :not_found} =
+               DisplayMessagePersistence.update_tool_status(
+                 scope,
+                 :executing,
+                 %{call_id: "ghost-call"},
+                 ctx(conv.id)
+               )
+    end
+  end
+
+  describe "resolve_tool_result/4" do
+    test "delegates to Conversations.resolve_interrupted_tool_result/3" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      conv = insert(:conversation, user_id: owner_id)
+      call_id = "call_#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Conversations.append_display_message(scope, conv.id, %{
+          message_type: "tool",
+          content_type: "tool_result",
+          content: %{
+            "tool_call_id" => call_id,
+            "name" => "do_thing",
+            "content" => "(pending)",
+            "is_interrupt" => true
+          }
+        })
+
+      assert {:ok, msg} =
+               DisplayMessagePersistence.resolve_tool_result(
+                 scope,
+                 call_id,
+                 "ok!",
+                 ctx(conv.id)
+               )
+
+      assert msg.content["is_interrupt"] == false
+      assert msg.content["content"] == "ok!"
+    end
+
+    test "returns {:error, :not_found} for an unknown tool_call_id" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      conv = insert(:conversation, user_id: owner_id)
+
+      assert {:error, :not_found} =
+               DisplayMessagePersistence.resolve_tool_result(
+                 scope,
+                 "no-such-call",
+                 "x",
+                 ctx(conv.id)
+               )
+    end
+  end
+
+  describe "save_message/3 — tool calls" do
+    test "persists assistant tool_call messages with status pending" do
+      %{owner_id: owner_id} = scope = build(:scope)
+      conv = insert(:conversation, user_id: owner_id)
+
+      msg = %Message{
+        role: :assistant,
+        content: nil,
+        tool_calls: [
+          LangChain.Message.ToolCall.new!(%{
+            call_id: "call_#{System.unique_integer([:positive])}",
+            name: "search",
+            arguments: %{"q" => "elixir"}
+          })
+        ]
+      }
+
+      assert {:ok, [display]} =
+               DisplayMessagePersistence.save_message(scope, msg, ctx(conv.id))
+
+      assert display.message_type == "assistant"
+      assert display.content_type == "tool_call"
+      assert display.status == "pending"
+      assert display.content["name"] == "search"
+    end
+
+    test "tolerates duplicate tool_call_id (returns :ok with empty list)" do
+      # Re-saving the same tool call (e.g. agent restart mid-stream re-emits the
+      # same call_id) must not crash the AgentServer; the persistence layer
+      # silently skips the duplicate.
+      %{owner_id: owner_id} = scope = build(:scope)
+      conv = insert(:conversation, user_id: owner_id)
+      call_id = "call_dup_#{System.unique_integer([:positive])}"
+
+      msg = %Message{
+        role: :assistant,
+        content: nil,
+        tool_calls: [
+          LangChain.Message.ToolCall.new!(%{
+            call_id: call_id,
+            name: "x",
+            arguments: %{}
+          })
+        ]
+      }
+
+      {:ok, [_first]} = DisplayMessagePersistence.save_message(scope, msg, ctx(conv.id))
+
+      assert {:ok, []} = DisplayMessagePersistence.save_message(scope, msg, ctx(conv.id))
     end
   end
 end

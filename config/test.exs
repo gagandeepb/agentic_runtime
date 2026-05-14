@@ -12,8 +12,9 @@ config :agentic_runtime,
   ecto_repos: [AgenticRuntime.TestRepo],
   repo: AgenticRuntime.TestRepo,
   pubsub_name: AgenticRuntime.TestPubSub,
-  presence_module: AgenticRuntime.TestPresence,
-  server_adapter: AgenticRuntime.Agents.ServerAdapter.Mock,
-  supervisor_adapter: AgenticRuntime.Agents.SupervisorAdapter.Mock
+  presence_module: AgenticRuntime.TestPresence
+
+# server_adapter: AgenticRuntime.Agents.ServerAdapter.Mock,
+# supervisor_adapter: AgenticRuntime.Agents.SupervisorAdapter.Mock
 
 config :logger, level: :warning

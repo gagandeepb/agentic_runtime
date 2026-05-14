@@ -1,14 +1,8 @@
 defmodule AgenticRuntime.Agents.CoordinatorTest do
-  use AgenticRuntime.DataCase, async: true
-
-  import Mox
+  use AgenticRuntime.AgentCase, async: true
 
   alias AgenticRuntime.Agents.Coordinator
-  alias AgenticRuntime.Agents.ServerAdapter
-  alias AgenticRuntime.Agents.SupervisorAdapter
   alias AgenticRuntime.Conversations
-
-  setup :verify_on_exit!
 
   defp build_factory_opts do
     model = AgenticRuntime.build_anthropic_model_config("claude-opus-4-7", "k", [])
@@ -71,13 +65,13 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
     @tag :skip
     test "raises ArgumentError when :filesystem_scope is missing" do
       assert_raise ArgumentError, ~r/filesystem_scope/, fn ->
-        Coordinator.start_conversation_session("conv-1", scope: build_scope())
+        Coordinator.start_conversation_session("conv-1", scope: build(:scope))
       end
     end
 
     test "returns the existing session when an agent is already running" do
-      scope = build_scope()
-      conversation = insert_conversation!(scope)
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
       expected_id = "conversation-#{conversation.id}"
       fake_pid = self()
 
@@ -96,8 +90,8 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
     end
 
     test "starts a new session when none exists, using fresh state" do
-      scope = build_scope()
-      conversation = insert_conversation!(scope)
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
       expected_id = "conversation-#{conversation.id}"
       agent_pid = self()
 
@@ -126,8 +120,8 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
     end
 
     test "restores persisted state into the session when one exists" do
-      scope = build_scope()
-      conversation = insert_conversation!(scope)
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
       expected_id = "conversation-#{conversation.id}"
 
       saved_state = %{
@@ -167,8 +161,8 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
     end
 
     test "propagates supervisor errors as {:error, reason}" do
-      scope = build_scope()
-      conversation = insert_conversation!(scope)
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
 
       expect(ServerAdapter.Mock, :get_pid, fn _ -> nil end)
       expect(SupervisorAdapter.Mock, :start_agent_sync, fn _ -> {:error, :boom} end)
@@ -223,6 +217,49 @@ defmodule AgenticRuntime.Agents.CoordinatorTest do
       :ok = Coordinator.untrack_conversation_viewer(conv_id, "viewer-2")
 
       refute Map.has_key?(Coordinator.list_conversation_viewers(conv_id), "viewer-2")
+    end
+
+    test "metadata stamped on the tracked entry includes joined_at and caller fields" do
+      conv_id = Ecto.UUID.generate()
+
+      {:ok, _ref} =
+        Coordinator.track_conversation_viewer(conv_id, "viewer-meta", %{name: "Bob"})
+
+      %{"viewer-meta" => %{metas: [meta | _]}} =
+        Coordinator.list_conversation_viewers(conv_id)
+
+      assert meta.name == "Bob"
+      assert is_integer(meta.joined_at)
+    end
+  end
+
+  describe "subscribe_to_conversation/1" do
+    test "raw subscribe receives broadcasts on the agent topic" do
+      conv_id = Ecto.UUID.generate()
+      :ok = Coordinator.subscribe_to_conversation(conv_id)
+
+      Phoenix.PubSub.broadcast(
+        AgenticRuntime.TestPubSub,
+        Coordinator.conversation_topic(conv_id),
+        {:raw_event, "ping"}
+      )
+
+      assert_receive {:raw_event, "ping"}, 500
+    end
+  end
+
+  describe "config getters" do
+    test "conversation_topic/1 returns the agent_server:<agent_id> topic" do
+      conv_id = "fixed-id"
+      assert Coordinator.conversation_topic(conv_id) == "agent_server:conversation-fixed-id"
+    end
+
+    test "pubsub_name/0 returns the value configured under :agentic_runtime" do
+      assert Coordinator.pubsub_name() == AgenticRuntime.TestPubSub
+    end
+
+    test "presence_module/0 returns the value configured under :agentic_runtime" do
+      assert Coordinator.presence_module() == AgenticRuntime.TestPresence
     end
   end
 end

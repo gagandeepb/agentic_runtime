@@ -361,7 +361,7 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
 
   describe "load_conversation/3" do
     test "{:error, :not_found, socket} when the conversation does not exist" do
-      scope = build_scope()
+      scope = build(:scope)
       missing_id = Ecto.UUID.generate()
 
       assert {:error, :not_found, _} =
@@ -369,8 +369,8 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
     end
 
     test "loads messages and sets agent assigns when found" do
-      scope = build_scope()
-      conversation = insert_conversation!(scope, %{title: "Loaded"})
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id, title: "Loaded")
 
       {:ok, _} =
         AgenticRuntime.Conversations.append_display_message(
@@ -394,8 +394,8 @@ defmodule AgenticRuntime.IntegrationHelpersTest do
 
   describe "create_or_persist_message/3" do
     test "persists a text message when conversation_id and current_scope are set" do
-      scope = build_scope()
-      conversation = insert_conversation!(scope)
+      %{owner_id: owner_id} = scope = build(:scope)
+      conversation = insert(:conversation, user_id: owner_id)
 
       socket =
         socket(%{
